@@ -91,8 +91,10 @@
   function mdCodeStyle() { return { fontFamily: "var(--font-courier, monospace)", fontSize: "0.9em", background: "rgba(128,128,128,.18)", border: "1px solid rgba(128,128,128,.28)", borderRadius: 4, padding: "0.5px 5px", color: "inherit" }; }
   function mdInline(s, onOpen) {
     var out = [], rest = String(s == null ? "" : s), key = 0;
+    function pstate(cand, isFile) { if (!onOpen || !onOpen.known) return "valid"; var st = onOpen.known(cand); if (st === undefined) { if (onOpen.ensure) onOpen.ensure(cand, isFile); return "pending"; } return st; }
+    function panchor(cand, label, style, kk) { return h("a", { key: kk, href: (onOpen.hrefFor ? onOpen.hrefFor(cand) : filesDownloadHref(cand)), target: "_blank", rel: "noopener noreferrer", title: "Open " + cand, onClick: function (e) { e.preventDefault(); e.stopPropagation(); onOpen(cand); }, style: style }, label); }
     var pats = [
-      { re: /`([^`]+)`/, mk: function (m) { var inner = m[1]; var pp = inner.trim(); if (onOpen && /^(?:[\w.\-]+\/)+[\w.\-]+\.[A-Za-z0-9]{1,8}$/.test(pp)) { return h("a", { key: "cl" + (key++), href: (onOpen.hrefFor ? onOpen.hrefFor(pp) : filesDownloadHref(pp)), target: "_blank", rel: "noopener noreferrer", title: "Open " + pp, onClick: function (e) { e.preventDefault(); e.stopPropagation(); onOpen(pp); }, style: Object.assign({}, mdCodeStyle(), { color: accent, textDecoration: "underline", cursor: "pointer", wordBreak: "break-all" }) }, inner); } return h("code", { key: "c" + (key++), style: mdCodeStyle() }, inner); } },
+      { re: /`([^`]+)`/, mk: function (m) { var inner = m[1]; var pp = inner.trim(); if (onOpen && /^(?:[\w.\-]+\/)+[\w.\-]+\.[A-Za-z0-9]{1,8}$/.test(pp) && pstate(pp, true) === "valid") return panchor(pp, inner, Object.assign({}, mdCodeStyle(), { color: accent, textDecoration: "underline", cursor: "pointer", wordBreak: "break-all" }), "cl" + (key++)); return h("code", { key: "c" + (key++), style: mdCodeStyle() }, inner); } },
       { re: /((?:https?:\/\/|www\.)[^\s<>()\[\]]+)/, mk: function (m) { var raw = m[1].replace(/[.,;:!?]+$/, ""); var href = /^www\./i.test(raw) ? ("https://" + raw) : raw; return h("a", { key: "u" + (key++), href: href, target: "_blank", rel: "noopener noreferrer", onClick: function (e) { e.stopPropagation(); }, style: { color: accent, textDecoration: "underline", wordBreak: "break-all" } }, raw); } },
       { re: /\*\*([^*]+)\*\*/, mk: function (m) { return h("strong", { key: "b" + (key++) }, mdInline(m[1], onOpen)); } },
       { re: /__([^_]+)__/, mk: function (m) { return h("strong", { key: "b" + (key++) }, mdInline(m[1], onOpen)); } },
@@ -100,8 +102,8 @@
       { re: /~~([^~]+)~~/, mk: function (m) { return h("del", { key: "s" + (key++) }, mdInline(m[1], onOpen)); } },
       { re: /\[([^\]]+)\]\(([^)\s]+)\)/, mk: function (m) { return h("a", { key: "l" + (key++), href: m[2], target: "_blank", rel: "noopener noreferrer", onClick: function (e) { e.stopPropagation(); }, style: { color: accent, textDecoration: "underline" } }, m[1]); } }
     ];
-    if (onOpen) pats.push({ re: /((?:[\w.\-]+\/)+[\w.\-]+\.[A-Za-z0-9]{1,8})/, mk: function (m) { var pp = m[1]; return h("a", { key: "fp" + (key++), href: (onOpen.hrefFor ? onOpen.hrefFor(pp) : filesDownloadHref(pp)), target: "_blank", rel: "noopener noreferrer", title: "Open " + pp, onClick: function (e) { e.preventDefault(); e.stopPropagation(); onOpen(pp); }, style: { color: accent, textDecoration: "underline", wordBreak: "break-all", cursor: "pointer" } }, pp); } });
-    if (onOpen && onOpen.folders) pats.push({ re: /((?:[\w.\-]+\/){2,}[\w.\-]+)(?![\w.\-]*\.[A-Za-z0-9])/, mk: function (m) { var pp = m[1].replace(/\/+$/, ""); return h("a", { key: "dp" + (key++), href: (onOpen.hrefFor ? onOpen.hrefFor(pp) : "#"), target: "_blank", rel: "noopener noreferrer", title: "Open folder " + pp, onClick: function (e) { e.preventDefault(); e.stopPropagation(); onOpen(pp); }, style: { color: accent, textDecoration: "underline", wordBreak: "break-all", cursor: "pointer" } }, m[1]); } });
+    if (onOpen) pats.push({ re: /((?:[\w.\-]+\/)+[\w.\-]+\.[A-Za-z0-9]{1,8})/, mk: function (m) { var pp = m[1]; if (pstate(pp, true) === "valid") return panchor(pp, pp, { color: accent, textDecoration: "underline", wordBreak: "break-all", cursor: "pointer" }, "fp" + (key++)); return pp; } });
+    if (onOpen && onOpen.folders) pats.push({ re: /((?:[\w.\-]+\/){2,}[\w.\-]+)(?![\w.\-]*\.[A-Za-z0-9])/, mk: function (m) { var raw = m[1]; var pp = raw.replace(/[.,;:!?]+$/, "").replace(/\/+$/, ""); var tail = raw.slice(pp.length); if (pstate(pp, false) === "valid") return h(React.Fragment, { key: "df" + (key++) }, panchor(pp, pp, { color: accent, textDecoration: "underline", wordBreak: "break-all", cursor: "pointer" }, "dp" + (key++)), tail); return raw; } });
     var guard = 0;
     while (rest && guard++ < 5000) {
       var best = null;
@@ -206,6 +208,40 @@
       if (cacheRef.current) cacheRef.current[rel] = pick || false;
       return pick || false;
     });
+  }
+
+  // Directed BFS for a *directory* whose relative path ends with `relRaw` (folder equivalent of resolveFilePath).
+  function resolveFolderPath(relRaw, cacheRef) {
+    var rel = String(relRaw).replace(/^\/+/, "");
+    if (cacheRef.current && (rel in cacheRef.current)) return Promise.resolve(cacheRef.current[rel]);
+    var segs = rel.split("/"); var firstDir = segs[0]; var restAfterFirst = segs.slice(1).join("/");
+    var relDirSet = {}; segs.forEach(function (s) { relDirSet[s] = 1; });
+    var rootPath = null, listings = 0, MAX = 600, MAX_DEPTH = 14;
+    var pq = [], nq = [], seen = { "": 1 }; nq.push({ d: "", depth: 0 });
+    var directTried = {};
+    function relOf(e) { if (rootPath && e.path && e.path.indexOf(rootPath) === 0) return e.path.slice(rootPath.length).replace(/^\/+/, ""); return e.name; }
+    function enqueue(d, depth) { if (seen[d]) return; seen[d] = 1; var nm = d.split("/").pop(); (relDirSet[nm] ? pq : nq).push({ d: d, depth: depth }); }
+    function tryDirect(c) { if (directTried[c]) return Promise.resolve(null); directTried[c] = 1; return listDir(c).then(function () { return c; }).catch(function () { return null; }); }
+    function loop() {
+      if ((!pq.length && !nq.length) || listings >= MAX) return Promise.resolve(null);
+      var wave = []; while ((pq.length || nq.length) && wave.length < 8 && listings < MAX) { wave.push(pq.length ? pq.shift() : nq.shift()); listings++; }
+      return Promise.all(wave.map(function (item) {
+        return listDir(item.d).catch(function () { return null; }).then(function (r) {
+          if (!r) return null; if (rootPath == null && r.root) rootPath = r.root;
+          var found = null, cands = [];
+          (r.entries || []).forEach(function (e) {
+            if (!e.is_directory) return; var rr = relOf(e);
+            if (rr === rel || (rr.length > rel.length && rr.slice(-(rel.length + 1)) === "/" + rel)) found = rr;
+            if (firstDir && e.name === firstDir) cands.push(restAfterFirst ? (rr + "/" + restAfterFirst) : rr);
+            if (item.depth < MAX_DEPTH && !SKIP[e.name]) enqueue(rr, item.depth + 1);
+          });
+          if (found) return found;
+          if (cands.length) return Promise.all(cands.map(tryDirect)).then(function (rs) { return rs.filter(Boolean)[0] || null; });
+          return null;
+        });
+      })).then(function (results) { var hit = results.filter(Boolean)[0]; return hit ? hit : loop(); });
+    }
+    return loop().then(function (hit) { if (cacheRef.current) cacheRef.current[rel] = hit || false; return hit || false; });
   }
 
   // Build a full (bounded) file index for search.
@@ -345,6 +381,10 @@
     s = useState(null); var zip = s[0], setZip = s[1];               // {name,phase,done,total,skipped,partial,error} | null
 
     var resolveCacheRef = useRef({});
+    var folderCacheRef = useRef({});
+    var pathValidRef = useRef({});
+    var searchChainRef = useRef(Promise.resolve());
+    var pvSt = useState(0); var pathV = pvSt[0], setPathV = pvSt[1];
     var indexRef = useRef(null);
     var fpRef = useRef(null); fpRef.current = filePreview;
     var stackRef = useRef([]); stackRef.current = stack;
@@ -394,12 +434,32 @@
     function closeViewer() { setFilePreview(null); setStack([]); }
 
     // path handler for markdown inside previewed files: files open in viewer, folders navigate the browser
+    // Paths only become links once the target is verified to exist (direct check or bounded tree search); cached per candidate.
+    function serialSearch(fn) { var pr = searchChainRef.current.then(fn, fn); searchChainRef.current = pr.catch(function () {}); return pr; }
+    function validatePath(cand, isFile) {
+      var clean = String(cand).replace(/^\/+/, "");
+      function search() { return serialSearch(function () { return resolveFilePath(clean, resolveCacheRef); }).then(function (res) { return res ? { valid: true, resolved: res } : { valid: false }; }); }
+      function searchDir() { return serialSearch(function () { return resolveFolderPath(clean, folderCacheRef); }).then(function (res) { return res ? { valid: true, resolved: res } : { valid: false }; }); }
+      if (isFile) {
+        var parts = clean.split("/"); var b = parts.pop(); var parent = parts.join("/");
+        return listDir(parent).then(function (r) {
+          if (r && r.entries && r.entries.some(function (e) { return !e.is_directory && e.name === b; })) return { valid: true, resolved: clean };
+          return search();
+        }).catch(function () { return readFile(clean).then(function () { return { valid: true, resolved: clean }; }).catch(search); });
+      }
+      var fparts = clean.split("/"); var fb = fparts.pop(); var fparent = fparts.join("/");
+      return listDir(fparent).then(function (r) { if (r && r.entries && r.entries.some(function (e) { return e.is_directory && e.name === fb; })) return { valid: true, resolved: clean }; return searchDir(); }).catch(searchDir);
+    }
     function navPathHandler(path) {
-      if (isFilePath(path)) navViewer(path);
-      else { closeViewer(); setQuery(""); setResults(null); setCwd(String(path).replace(/^\/+/, "")); }
+      var t = navPathHandler.resolvedOf(path);
+      if (isFilePath(t)) navViewer(t);
+      else { closeViewer(); setQuery(""); setResults(null); setCwd(String(t).replace(/^\/+/, "")); }
     }
     navPathHandler.folders = true;
-    navPathHandler.hrefFor = function (p) { return isFilePath(p) ? filesDownloadHref(p) : (currentPluginPath() + "?path=" + encodeURIComponent(String(p).replace(/^\/+/, ""))); };
+    navPathHandler.known = function (cand) { var e = pathValidRef.current[cand]; return e ? e.state : undefined; };
+    navPathHandler.ensure = function (cand, isF) { if (pathValidRef.current[cand]) return; pathValidRef.current[cand] = { state: "pending" }; validatePath(cand, isF).then(function (res) { pathValidRef.current[cand] = res.valid ? { state: "valid", resolved: res.resolved } : { state: "invalid" }; setPathV(function (v) { return v + 1; }); }).catch(function () { pathValidRef.current[cand] = { state: "invalid" }; setPathV(function (v) { return v + 1; }); }); };
+    navPathHandler.resolvedOf = function (cand) { var e = pathValidRef.current[cand]; return (e && e.resolved) || cand; };
+    navPathHandler.hrefFor = function (p) { var t = navPathHandler.resolvedOf(p); return isFilePath(t) ? filesDownloadHref(t) : (currentPluginPath() + "?path=" + encodeURIComponent(String(t).replace(/^\/+/, ""))); };
 
     function openEntry(e) {
       var rel = (dir && dir.root && e.path && e.path.indexOf(dir.root) === 0) ? e.path.slice(dir.root.length).replace(/^\/+/, "") : (cwd ? (cwd + "/" + e.name) : e.name);

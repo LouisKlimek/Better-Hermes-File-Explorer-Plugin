@@ -56,6 +56,14 @@ nothing new to authenticate: it uses your existing dashboard session.
   become links that open the target *in the same viewer*, with a **← Back**
   button to return to the previous file. Folder paths open in the browser.
   Web URLs (`https://…`, `www.…`) open in a new tab.
+- **Existence-validated links** — a slash-separated token only turns into a link
+  once the file or folder is verified to exist: first a direct check (listing the
+  parent directory), and if that misses (agents often omit a path prefix) a
+  bounded search of the file tree. Prose that merely contains slashes — e.g.
+  `ToS/robots.txt`, `Normalisierungs-/Dedupe-/…`, `WDR/mitvergnuegen/Stadtmarketing`
+  — stays plain text. Each text→link decision is **cached** per candidate, so the
+  same path isn't re-checked on every render; unresolved candidates run the
+  detailed search once. A trailing sentence period is kept out of the link.
 - **Smart path resolution** — agents often write paths relative to their working
   directory (e.g. `feasibility-reviews/x.md` when the file really lives at
   `strategy-lab/pending/feasibility-reviews/x.md`). The viewer searches the tree
