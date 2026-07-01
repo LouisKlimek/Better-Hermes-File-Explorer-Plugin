@@ -30,24 +30,30 @@
   function filesDownloadHref(p) { var clean = String(p).replace(/^\/+/, ""); return basePath() + "/api/files/download?path=" + encodeURIComponent(clean) + (sessionTok() ? "&token=" + encodeURIComponent(sessionTok()) : ""); }
 
   // ── write endpoints (from the built-in explorer's network capture) ──
-  // mkdir: POST /api/files/mkdir  (application/x-www-form-urlencoded)  body: path=<ABSOLUTE path>
+  // mkdir: POST /api/files/mkdir   (application/json)          body: {"path": "<ABSOLUTE path>"}
   // upload: POST /api/files/upload-stream  (multipart/form-data)  fields below.
   // NOTE: the two upload field names are inferred from the mkdir "path" convention.
   //       If the network capture (upload-stream → Request → form-data) shows other
   //       names, just change these two constants — nothing else needs to change.
   var MKDIR_URL = "/api/files/mkdir";
   var UPLOAD_URL = "/api/files/upload-stream";
+  var FILES_URL = "/api/files"; // DELETE here: JSON body {path, recursive}
   var UPLOAD_FIELD_PATH = "path"; // absolute destination path (dir + filename)
   var UPLOAD_FIELD_FILE = "file"; // the binary
   function writeHeaders(extra) { var hh = Object.assign({}, extra || {}); var t = sessionTok(); if (t) { hh["X-Hermes-Session-Token"] = t; hh["Authorization"] = "Bearer " + t; } return hh; }
+  function apiErr(j) { if (!j) return null; if (typeof j.error === "string") return j.error; if (typeof j.detail === "string") return j.detail; if (Array.isArray(j.detail)) return j.detail.map(function (d) { return d && d.msg ? d.msg : (typeof d === "string" ? d : JSON.stringify(d)); }).join("; "); if (typeof j.message === "string") return j.message; return null; }
   function joinAbs(root, rel) { root = String(root || "").replace(/\/+$/, ""); rel = String(rel || "").replace(/^\/+/, ""); return rel ? (root + "/" + rel) : root; }
   function dirnameOf(p) { return String(p || "").replace(/\/+$/, "").split("/").slice(0, -1).join("/"); }
   function basenameOf(p) { return String(p || "").replace(/\/+$/, "").split("/").pop(); }
   function splitExt(name) { var m = /^(.*?)(\.[^.\/]+)$/.exec(name); return m ? { base: m[1], ext: m[2] } : { base: name, ext: "" }; }
   function uniqueName(name, existingSet) { if (!existingSet || !existingSet[name.toLowerCase()]) return name; var p = splitExt(name), i = 1, cand; do { cand = p.base + " (" + i + ")" + p.ext; i++; } while (existingSet[cand.toLowerCase()] && i < 9999); return cand; }
   function mkdirReq(absPath) {
-    return fetch(basePath() + MKDIR_URL, { method: "POST", credentials: "same-origin", headers: writeHeaders({ "Content-Type": "application/x-www-form-urlencoded" }), body: "path=" + encodeURIComponent(absPath) })
-      .then(function (r) { return r.text().then(function (tx) { var j = null; try { j = JSON.parse(tx); } catch (e) {} if (!r.ok) throw new Error((j && (j.error || j.detail)) || ("HTTP " + r.status)); return j || {}; }); });
+    return fetch(basePath() + MKDIR_URL, { method: "POST", credentials: "same-origin", headers: writeHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ path: absPath }) })
+      .then(function (r) { return r.text().then(function (tx) { var j = null; try { j = JSON.parse(tx); } catch (e) {} if (!r.ok) throw new Error(apiErr(j) || ("HTTP " + r.status)); return j || {}; }); });
+  }
+  function deleteReq(absPath, recursive) {
+    return fetch(basePath() + FILES_URL, { method: "DELETE", credentials: "same-origin", headers: writeHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ path: absPath, recursive: !!recursive }) })
+      .then(function (r) { return r.text().then(function (tx) { var j = null; try { j = JSON.parse(tx); } catch (e) {} if (!r.ok) throw new Error(apiErr(j) || ("HTTP " + r.status)); return j || {}; }); });
   }
   function uploadReq(absPath, file, onProgress) {
     return new Promise(function (resolve, reject) {
@@ -56,7 +62,7 @@
       xhr.withCredentials = true; // same-origin session cookie
       var t = sessionTok(); if (t) { xhr.setRequestHeader("X-Hermes-Session-Token", t); xhr.setRequestHeader("Authorization", "Bearer " + t); }
       if (xhr.upload) xhr.upload.onprogress = function (e) { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
-      xhr.onload = function () { if (xhr.status >= 200 && xhr.status < 300) { var j = null; try { j = JSON.parse(xhr.responseText); } catch (e) {} resolve(j || { ok: true }); } else reject(new Error("HTTP " + xhr.status)); };
+      xhr.onload = function () { if (xhr.status >= 200 && xhr.status < 300) { var j = null; try { j = JSON.parse(xhr.responseText); } catch (e) {} resolve(j || { ok: true }); } else { var je = null; try { je = JSON.parse(xhr.responseText); } catch (e) {} reject(new Error(apiErr(je) || ("HTTP " + xhr.status))); } };
       xhr.onerror = function () { reject(new Error("network error")); };
       xhr.onabort = function () { reject(new Error("aborted")); };
       var fd = new FormData();
@@ -78,6 +84,8 @@
   function UploadIcon(sz) { return ic(["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "M17 8l-5-5-5 5", "M12 3v12"], sz || 15); }
   function FolderPlusIcon(sz) { return ic(["M4 4h5l2 3h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z", "M12 11v6", "M9 14h6"], sz || 15); }
   function UploadFolderIcon(sz) { return ic(["M4 4h5l2 3h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z", "M12 17v-6", "M9.5 13.5 12 11l2.5 2.5"], sz || 15); }
+  function DownloadIcon(sz) { return ic(["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "M7 10l5 5 5-5", "M12 15V3"], sz || 15); }
+  function TrashIcon(sz) { return ic(["M3 6h18", "M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2", "M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6", "M10 11v6", "M14 11v6"], sz || 15); }
 
   // ── markdown renderer (same engine as the file viewer) ──
   function mdCodeStyle() { return { fontFamily: "var(--font-courier, monospace)", fontSize: "0.9em", background: "rgba(128,128,128,.18)", border: "1px solid rgba(128,128,128,.28)", borderRadius: 4, padding: "0.5px 5px", color: "inherit" }; }
@@ -269,6 +277,9 @@
     s = useState(null); var mkdirErr = s[0], setMkdirErr = s[1];
     s = useState(false); var mkdirBusy = s[0], setMkdirBusy = s[1];
     s = useState(null); var conflict = s[0], setConflict = s[1];      // {name,dir,resolve} | null
+    s = useState(null); var del = s[0], setDel = s[1];                // {rel,name,isDir} | null
+    s = useState(false); var delBusy = s[0], setDelBusy = s[1];
+    s = useState(null); var delErr = s[0], setDelErr = s[1];
 
     var resolveCacheRef = useRef({});
     var indexRef = useRef(null);
@@ -460,6 +471,20 @@
     function onDragLeave(ev) { dragDepthRef.current = Math.max(0, dragDepthRef.current - 1); if (dragDepthRef.current === 0) setDragOver(false); }
     function clearFinishedUploads() { setUploads(function (list) { return list.filter(function (u) { return u.status === "uploading" || u.status === "queued"; }); }); }
 
+    // ── delete ──
+    function askDelete(rel, name, isDir) { setDelErr(null); setDel({ rel: rel, name: name, isDir: !!isDir }); }
+    function submitDelete() {
+      var d = del; if (!d) return;
+      var absPath = joinAbs(rootRef.current, d.rel);
+      setDelBusy(true); setDelErr(null);
+      deleteReq(absPath, d.isDir).then(function () {
+        setDelBusy(false); setDel(null);
+        // if the deleted file is open in the viewer, close it
+        var fp = fpRef.current; if (fp && fp.path && String(fp.path).replace(/^\/+/, "") === String(d.rel).replace(/^\/+/, "")) closeViewer();
+        indexRef.current = null; loadDir(cwd); if (query) runSearch(query);
+      }).catch(function (e) { setDelBusy(false); setDelErr("Konnte nicht l\u00f6schen: " + ((e && e.message) || "Fehler")); });
+    }
+
 
     // init from URL once
     useEffect(function () {
@@ -506,6 +531,13 @@
         h("span", { style: { color: accent, display: "inline-flex", flex: "0 0 auto" } }, ic(["M9 14 4 9l5-5", "M20 20v-7a4 4 0 0 0-4-4H4"], 18)),
         h("span", { style: { flex: "1 1 auto", minWidth: 0, fontSize: 13.5, fontFamily: "var(--font-courier, monospace)", color: muted } }, ".."));
     }
+    function relOfEntry(e) { return (dir && dir.root && e.path && e.path.indexOf(dir.root) === 0) ? e.path.slice(dir.root.length).replace(/^\/+/, "") : (cwd ? (cwd + "/" + e.name) : e.name); }
+    function actionBtnStyle(c) { return { display: "inline-flex", alignItems: "center", justifyContent: "center", background: "transparent", border: "none", color: c || muted, textDecoration: "none", cursor: "pointer", padding: 5, borderRadius: 7 }; }
+    function rowActions(rel, name, isDir) {
+      return h("span", { style: { flex: "0 0 auto", display: "inline-flex", alignItems: "center", gap: 1 } },
+        isDir ? null : h("a", { href: filesDownloadHref(rel), target: "_blank", rel: "noopener noreferrer", title: "Download", onClick: function (ev) { ev.stopPropagation(); }, style: actionBtnStyle(muted), onMouseEnter: function (ev) { ev.currentTarget.style.color = accent; }, onMouseLeave: function (ev) { ev.currentTarget.style.color = muted; } }, DownloadIcon(16)),
+        h("button", { title: isDir ? "Ordner l\u00f6schen" : "Datei l\u00f6schen", onClick: function (ev) { ev.stopPropagation(); askDelete(rel, name, isDir); }, style: actionBtnStyle(muted), onMouseEnter: function (ev) { ev.currentTarget.style.color = "#f87171"; }, onMouseLeave: function (ev) { ev.currentTarget.style.color = muted; } }, TrashIcon(16)));
+    }
     function listView() {
       if (dirLoading && !dir) return h("div", { style: { padding: 20, color: muted, fontSize: 13 } }, "Loading\u2026");
       if (dirErr) return h("div", { style: { padding: 20, color: "#f87171", fontSize: 13 } }, "Could not open folder: " + dirErr);
@@ -518,7 +550,8 @@
           h("span", { style: { color: isDir ? accent : muted, display: "inline-flex", flex: "0 0 auto" } }, isDir ? FolderIcon(18) : FileIcon(18)),
           h("span", { style: { flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13.5 } }, e.name),
           h("span", { style: { flex: "0 0 auto", color: muted, fontSize: 11.5 } }, isDir ? "" : fmtBytes(e.size)),
-          h("span", { style: { flex: "0 0 auto", color: muted, fontSize: 11.5, minWidth: 140, textAlign: "right" } }, fmtTime(e.mtime)));
+          h("span", { style: { flex: "0 0 auto", color: muted, fontSize: 11.5, minWidth: 120, textAlign: "right" } }, fmtTime(e.mtime)),
+          rowActions(relOfEntry(e), e.name, isDir));
       }));
     }
 
@@ -535,7 +568,8 @@
             h("span", { style: { flex: "1 1 auto", minWidth: 0 } },
               h("div", { style: { fontSize: 13.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, f.name),
               h("div", { style: { fontSize: 11, color: muted, fontFamily: "var(--font-courier, monospace)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, f.rel)),
-            h("span", { style: { flex: "0 0 auto", color: muted, fontSize: 11.5 } }, fmtBytes(f.size)));
+            h("span", { style: { flex: "0 0 auto", color: muted, fontSize: 11.5 } }, fmtBytes(f.size)),
+            rowActions(f.rel, f.name, false));
         }));
     }
 
@@ -632,6 +666,19 @@
             h("button", { onClick: function () { resolveConflict("overwrite", applyAllChecked()); }, style: Object.assign(cbtn("#fff"), { background: accent, borderColor: accent }) }, "\u00dcberschreiben"))));
     }
 
+    function deleteModal() {
+      if (!del) return null;
+      return h("div", { onClick: function () { if (!delBusy) setDel(null); }, style: { position: "fixed", inset: 0, zIndex: 2147483500, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 } },
+        h("div", { onClick: function (e) { e.stopPropagation(); }, style: { width: "min(460px, 94vw)", background: cardBg, border: "1px solid " + borderC, borderRadius: 14, boxShadow: "0 24px 70px rgba(0,0,0,.6)", padding: 18 } },
+          h("div", { style: { fontSize: 15, fontWeight: 700, marginBottom: 6 } }, del.isDir ? "Ordner l\u00f6schen?" : "Datei l\u00f6schen?"),
+          h("div", { style: { fontSize: 13, lineHeight: 1.55, marginBottom: 4 } }, "\u201e", h("b", null, del.name), "\u201c", del.isDir ? " und der gesamte Inhalt werden dauerhaft gel\u00f6scht." : " wird dauerhaft gel\u00f6scht.", " Das kann nicht r\u00fcckg\u00e4ngig gemacht werden."),
+          h("div", { style: { fontSize: 11.5, color: muted, fontFamily: "var(--font-courier, monospace)", marginBottom: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: "/" + del.rel }, "/" + del.rel),
+          delErr ? h("div", { style: { color: "#f87171", fontSize: 12, marginBottom: 12 } }, delErr) : null,
+          h("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8 } },
+            h("button", { onClick: function () { if (!delBusy) setDel(null); }, style: { background: "transparent", border: "1px solid " + borderC, color: muted, borderRadius: 9, padding: "8px 14px", fontSize: 12.5, cursor: "pointer" } }, "Abbrechen"),
+            h("button", { onClick: submitDelete, style: { background: "#ef4444", border: "1px solid #ef4444", color: "#fff", borderRadius: 9, padding: "8px 16px", fontSize: 12.5, cursor: "pointer", opacity: delBusy ? .7 : 1 } }, delBusy ? "\u2026" : "L\u00f6schen"))));
+    }
+
     return h("div", { style: { display: "flex", flexDirection: "column", height: "100%", fontFamily: "inherit" } },
       h("div", { style: { display: "flex", alignItems: "center", gap: 12, padding: "12px 4px 14px", flexWrap: "wrap" } },
         h("div", { style: { flex: "1 1 auto", minWidth: 160 } }, crumb()),
@@ -644,7 +691,7 @@
       h("div", { onDragEnter: onDragEnter, onDragOver: onDragOver, onDragLeave: onDragLeave, onDrop: onDrop, style: { flex: "1 1 auto", position: "relative", overflow: "auto", border: "1px solid " + borderC, borderRadius: 12, background: cardBg, minHeight: 0 } },
         query ? resultsView() : listView(),
         dragOver ? dropOverlay() : null),
-      viewer(), mkdirModal(), conflictModal());
+      viewer(), mkdirModal(), conflictModal(), deleteModal());
   }
 
   window.__HERMES_PLUGINS__.register("fileexplorer", Explorer);

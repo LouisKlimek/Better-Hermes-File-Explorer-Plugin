@@ -1,12 +1,13 @@
 # Better Hermes File Explorer
 
-A drop-in **Files** tab for the [Hermes Agent](https://github.com/NousResearch/Hermes) dashboard.
+A drop-in **Files** tab for the [Hermes Agent](https://github.com/NousResearch/hermes-agent) dashboard.
 
-Browse the managed file tree, preview files inline, search filenames across the
-whole tree, and deep-link to any folder or file by URL — all without leaving the
-dashboard. It talks to the built-in core file API (`/api/files`), so there is
-**no backend to install** and nothing new to authenticate: it uses your existing
-dashboard session.
+Browse the managed file tree, preview files inline, search filenames (with `*`
+wildcards) across the whole tree, **upload files and whole folders**, **create
+and delete folders/files**, and deep-link to any folder or file by URL — all
+without leaving the dashboard. It talks to the built-in core file API
+(`/api/files`), so there is **no backend to install** and nothing new to
+authenticate: it uses your existing dashboard session.
 
 <p align="center">
   <img src="docs/screenshot-explorer.png" alt="Better Hermes File Explorer" width="820">
@@ -16,7 +17,26 @@ dashboard session.
 
 - **Folder browser** — walk the managed file root (`/opt/data` in the hosted
   layout) like a normal file manager: folders first, sizes, modified times, a
-  clickable breadcrumb, and click-to-open.
+  clickable breadcrumb, and click-to-open. A **`..` row** at the top of every
+  sub-folder jumps up to the parent. Each row has quick actions on the right: a
+  **download** button (files) and a **delete** (trash) button.
+- **Delete** — the per-row trash button removes a file or folder after a
+  **confirmation prompt** (folders are deleted recursively, with the contents
+  clearly called out in the prompt). The open viewer closes automatically if the
+  file it was showing is deleted.
+- **Upload** — add files without leaving the dashboard:
+  - **Drag & drop** anywhere onto the listing, or use the **Dateien** (files)
+    button.
+  - **Whole-folder upload** — the **Ordner** button (and dropping a folder)
+    recreates the complete directory structure at the target, files in the right
+    places. Needed sub-folders are created automatically.
+  - **Per-file progress bars** (real upload progress) plus an overall
+    done / error summary.
+  - **Overwrite handling** — if a file already exists at the target you get a
+    prompt: **Overwrite**, **Keep both** (auto-renames to `name (1).ext`), or
+    **Skip** — with an *apply to all remaining conflicts* option.
+- **Create folder** — the **Neuer Ordner** button creates a directory in the
+  current folder, with a name-collision check before it calls the core.
 - **Rich inline file viewer**
   - **Markdown** rendered properly (headings, bold/italic, inline & fenced code,
     lists incl. nesting, tables, blockquotes, links) with a **Raw / Rendered**
@@ -34,8 +54,11 @@ dashboard session.
   `strategy-lab/pending/feasibility-reviews/x.md`). The viewer searches the tree
   and resolves the real path automatically, showing an "auto-resolved from …"
   note.
-- **Filename search** — a search box that indexes the tree and finds files by
-  substring anywhere in their path, with the full relative path shown.
+- **Filename search with `*` wildcards** — a search box that indexes the tree and
+  finds files by substring anywhere in their path. Add `*` to match any run of
+  characters: `*.md` finds everything ending in `.md`, `test*abc` matches names
+  that start with `test` and end with `abc`. Without a `*` it stays a plain
+  substring match. The full relative path is shown for every hit.
 - **Deep-linking** — the current folder or open file is reflected in the URL:
   - `…/file-explorer?path=strategy-lab/research` opens a folder
   - `…/file-explorer?file=strategy-lab/research/proof.md` opens a file
@@ -49,7 +72,7 @@ under any of its plugin roots (user: `~/.hermes/plugins/`, bundled, or project).
 **Via git (recommended):**
 
 ```bash
-hermes plugin install https://github.com/LouisKlimek/Better-Hermes-File-Explorer
+hermes plugin install https://github.com/LouisKlimek/Better-Hermes-File-Explorer-Plugin
 ```
 
 **Manual:** copy this repository into a plugin directory so the layout is:
@@ -65,7 +88,9 @@ Then refresh the dashboard's plugin list (Settings → rescan plugins, or hit
 `/api/dashboard/plugins/rescan`) and reload the page. A **Files** tab appears at `/file-explorer`.
 
 > This plugin is **frontend-only** — it has no `api` field, so a plugin rescan /
-> asset reload is enough; no `docker restart` is required.
+> asset reload is enough; no `docker restart` is required. Upload and folder
+> creation use the core's own write endpoints, so they need no extra backend
+> either.
 
 Confirm it's live: `GET /api/dashboard/plugins` should list `"name":
 "fileexplorer"` with the current `version`.
@@ -81,10 +106,24 @@ data comes from the core managed-files endpoints:
 | `GET /api/files?path=<dir>` | directory listing + tree walk (search / resolve) |
 | `GET /api/files/read?path=<file>` | inline preview (returns a base64 `data_url`) |
 | `GET /api/files/download?path=<file>&token=<t>` | the Download button |
+| `POST /api/files/mkdir` | create folder — JSON body `{"path": "<absolute path>"}` |
+| `POST /api/files/upload-stream` | upload — `multipart/form-data`, one file per request |
+| `DELETE /api/files` | delete — JSON body `{"path": "<absolute path>", "recursive": <bool>}` |
+
+The core works in **absolute** paths under the managed root (e.g.
+`/opt/data/…`); the plugin works internally in paths relative to that root and
+prefixes the root (read from any listing's `root` field) when it writes.
 
 Auth is handled the same way the rest of the dashboard does it: requests carry
 the same-origin session cookie plus an `Authorization: Bearer` token, which the
-core `auth_middleware` accepts.
+core `auth_middleware` accepts. Uploads use `XMLHttpRequest` so real progress can
+be reported.
+
+> **Upload field names.** The `upload-stream` multipart field names are defined
+> as two constants at the top of `dashboard/dist/index.js`
+> (`UPLOAD_FIELD_PATH` / `UPLOAD_FIELD_FILE`, defaulting to `path` / `file`). If a
+> future core build uses different names, change those two constants — nothing
+> else needs to change.
 
 ## Works great with Hermes-Tasklist-Plugin
 
@@ -113,6 +152,11 @@ None required. Optional manifest fields you can tweak in
   heavy directories like `node_modules`, `.git`, `dist`, `site-packages`, and
   caps how many folders it lists) so it stays fast on large roots. On a very
   large tree the search index may be truncated; the UI says so when that happens.
+  The index is rebuilt after an upload or folder creation so new files show up in
+  search.
+- Folder upload uses the browser's directory-picker (`webkitdirectory`) and, for
+  drag & drop, the `webkitGetAsEntry` filesystem API. Both are supported in
+  current Chromium and Firefox.
 - `GET /api/files/read` is size-limited by Hermes; oversized files can't be
   previewed inline — use **Download**.
 - Tested against the Hermes dashboard plugin SDK (React, no build step).
