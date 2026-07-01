@@ -203,7 +203,7 @@
     var didInit = useRef(false);
 
     // ── URL deep-linking ──
-    function currentPluginPath() { return (typeof window !== "undefined" && window.location ? window.location.pathname : "") || (basePath() + "/files"); }
+    function currentPluginPath() { return (typeof window !== "undefined" && window.location ? window.location.pathname : "") || (basePath() + "/file-explorer"); }
     function syncURL() {
       if (typeof window === "undefined" || !window.history) return;
       var qs;

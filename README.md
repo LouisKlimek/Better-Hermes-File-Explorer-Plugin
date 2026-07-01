@@ -37,8 +37,8 @@ dashboard session.
 - **Filename search** — a search box that indexes the tree and finds files by
   substring anywhere in their path, with the full relative path shown.
 - **Deep-linking** — the current folder or open file is reflected in the URL:
-  - `…/files?path=strategy-lab/research` opens a folder
-  - `…/files?file=strategy-lab/research/proof.md` opens a file
+  - `…/file-explorer?path=strategy-lab/research` opens a folder
+  - `…/file-explorer?file=strategy-lab/research/proof.md` opens a file
   These URLs are shareable and reload-safe.
 
 ## Install
@@ -62,7 +62,7 @@ hermes plugin install https://github.com/LouisKlimek/Better-Hermes-File-Explorer
 ```
 
 Then refresh the dashboard's plugin list (Settings → rescan plugins, or hit
-`/api/dashboard/plugins/rescan`) and reload the page. A **Files** tab appears.
+`/api/dashboard/plugins/rescan`) and reload the page. A **Files** tab appears at `/file-explorer`.
 
 > This plugin is **frontend-only** — it has no `api` field, so a plugin rescan /
 > asset reload is enough; no `docker restart` is required.
@@ -93,7 +93,7 @@ If you also run the
 it will **detect this plugin automatically**. When the File Explorer is
 installed, clickable file *and folder* paths inside task descriptions, results,
 run summaries and comments deep-link straight into this Explorer
-(`…/files?file=…` / `…/files?path=…`) instead of the tasklist's built-in mini
+(`…/file-explorer?file=…` / `…/file-explorer?path=…`) instead of the tasklist's built-in mini
 viewer. If the Explorer isn't installed, the tasklist falls back to its own
 in-app viewer — no configuration needed either way.
 
@@ -104,7 +104,7 @@ None required. Optional manifest fields you can tweak in
 
 - `label` — the tab title (default **Files**).
 - `icon` — a lucide icon name (default `FolderOpen`).
-- `tab.path` — the route the tab lives at (default `/files`).
+- `tab.path` — the route the tab lives at (default `/file-explorer`).
 - `tab.position` — where the tab sits (default `after:skills`).
 
 ## Compatibility & notes
