@@ -1,0 +1,8 @@
+name: fileexplorer
+version: 1.0.0
+description: "Better Hermes File Explorer: a dashboard-only Files tab to browse the managed file tree, preview files inline (Markdown/images/text with auto path-resolution), search filenames, and deep-link to folders/files by URL. Frontend lives in dashboard/; no agent-side hooks."
+author: Louis Klimek
+# Dashboard-only plugin — the UI is registered from dashboard/dist/index.js and
+# talks to the core /api/files endpoints. There are no agent lifecycle hooks,
+# so this list is intentionally empty.
+hooks: []
