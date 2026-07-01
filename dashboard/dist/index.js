@@ -28,6 +28,43 @@
   function readFile(p) { return filesGet("/api/files/read?path=" + encodeURIComponent(p)); }
   function listDir(rel) { return filesGet("/api/files" + (rel ? ("?path=" + encodeURIComponent(rel)) : "")); }
   function filesDownloadHref(p) { var clean = String(p).replace(/^\/+/, ""); return basePath() + "/api/files/download?path=" + encodeURIComponent(clean) + (sessionTok() ? "&token=" + encodeURIComponent(sessionTok()) : ""); }
+
+  // ── write endpoints (from the built-in explorer's network capture) ──
+  // mkdir: POST /api/files/mkdir  (application/x-www-form-urlencoded)  body: path=<ABSOLUTE path>
+  // upload: POST /api/files/upload-stream  (multipart/form-data)  fields below.
+  // NOTE: the two upload field names are inferred from the mkdir "path" convention.
+  //       If the network capture (upload-stream → Request → form-data) shows other
+  //       names, just change these two constants — nothing else needs to change.
+  var MKDIR_URL = "/api/files/mkdir";
+  var UPLOAD_URL = "/api/files/upload-stream";
+  var UPLOAD_FIELD_PATH = "path"; // absolute destination path (dir + filename)
+  var UPLOAD_FIELD_FILE = "file"; // the binary
+  function writeHeaders(extra) { var hh = Object.assign({}, extra || {}); var t = sessionTok(); if (t) { hh["X-Hermes-Session-Token"] = t; hh["Authorization"] = "Bearer " + t; } return hh; }
+  function joinAbs(root, rel) { root = String(root || "").replace(/\/+$/, ""); rel = String(rel || "").replace(/^\/+/, ""); return rel ? (root + "/" + rel) : root; }
+  function dirnameOf(p) { return String(p || "").replace(/\/+$/, "").split("/").slice(0, -1).join("/"); }
+  function basenameOf(p) { return String(p || "").replace(/\/+$/, "").split("/").pop(); }
+  function splitExt(name) { var m = /^(.*?)(\.[^.\/]+)$/.exec(name); return m ? { base: m[1], ext: m[2] } : { base: name, ext: "" }; }
+  function uniqueName(name, existingSet) { if (!existingSet || !existingSet[name.toLowerCase()]) return name; var p = splitExt(name), i = 1, cand; do { cand = p.base + " (" + i + ")" + p.ext; i++; } while (existingSet[cand.toLowerCase()] && i < 9999); return cand; }
+  function mkdirReq(absPath) {
+    return fetch(basePath() + MKDIR_URL, { method: "POST", credentials: "same-origin", headers: writeHeaders({ "Content-Type": "application/x-www-form-urlencoded" }), body: "path=" + encodeURIComponent(absPath) })
+      .then(function (r) { return r.text().then(function (tx) { var j = null; try { j = JSON.parse(tx); } catch (e) {} if (!r.ok) throw new Error((j && (j.error || j.detail)) || ("HTTP " + r.status)); return j || {}; }); });
+  }
+  function uploadReq(absPath, file, onProgress) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", basePath() + UPLOAD_URL, true);
+      xhr.withCredentials = true; // same-origin session cookie
+      var t = sessionTok(); if (t) { xhr.setRequestHeader("X-Hermes-Session-Token", t); xhr.setRequestHeader("Authorization", "Bearer " + t); }
+      if (xhr.upload) xhr.upload.onprogress = function (e) { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+      xhr.onload = function () { if (xhr.status >= 200 && xhr.status < 300) { var j = null; try { j = JSON.parse(xhr.responseText); } catch (e) {} resolve(j || { ok: true }); } else reject(new Error("HTTP " + xhr.status)); };
+      xhr.onerror = function () { reject(new Error("network error")); };
+      xhr.onabort = function () { reject(new Error("aborted")); };
+      var fd = new FormData();
+      fd.append(UPLOAD_FIELD_PATH, absPath);          // do NOT set Content-Type — FormData sets the multipart boundary
+      fd.append(UPLOAD_FIELD_FILE, file, file.name);
+      xhr.send(fd);
+    });
+  }
   function fmtBytes(n) { if (n == null) return ""; if (n < 1024) return n + " B"; if (n < 1048576) return (n / 1024).toFixed(1) + " KB"; if (n < 1073741824) return (n / 1048576).toFixed(1) + " MB"; return (n / 1073741824).toFixed(1) + " GB"; }
   function fmtTime(t) { if (!t) return ""; try { var d = new Date(t * 1000); return d.toLocaleString(); } catch (e) { return ""; } }
   function isFilePath(p) { return /\.[A-Za-z0-9]{1,8}$/.test(String(p).split("/").pop()); }
@@ -38,6 +75,9 @@
   function FileIcon(sz) { return h("svg", { width: sz || 18, height: sz || 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }, h("path", { d: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" }), h("path", { d: "M14 2v6h6" })); }
   function SearchIcon(sz) { return h("svg", { width: sz || 16, height: sz || 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }, h("circle", { cx: 11, cy: 11, r: 8 }), h("path", { d: "M21 21l-4.3-4.3" })); }
   function XIcon(sz) { return h("svg", { width: sz || 18, height: sz || 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }, h("path", { d: "M18 6 6 18" }), h("path", { d: "m6 6 12 12" })); }
+  function UploadIcon(sz) { return ic(["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "M17 8l-5-5-5 5", "M12 3v12"], sz || 15); }
+  function FolderPlusIcon(sz) { return ic(["M4 4h5l2 3h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z", "M12 11v6", "M9 14h6"], sz || 15); }
+  function UploadFolderIcon(sz) { return ic(["M4 4h5l2 3h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z", "M12 17v-6", "M9.5 13.5 12 11l2.5 2.5"], sz || 15); }
 
   // ── markdown renderer (same engine as the file viewer) ──
   function mdCodeStyle() { return { fontFamily: "var(--font-courier, monospace)", fontSize: "0.9em", background: "rgba(128,128,128,.18)", border: "1px solid rgba(128,128,128,.28)", borderRadius: 4, padding: "0.5px 5px", color: "inherit" }; }
@@ -182,6 +222,34 @@
     return step().then(function () { return { files: files, partial: listings >= MAX }; });
   }
 
+  // Walk a DataTransfer item list (drag&drop) into a flat [{file, sub}] list.
+  // `sub` is the path relative to the drop (incl. any dropped folder name), e.g. "myfolder/a/b.txt".
+  function readEntry(entry, base, out) {
+    return new Promise(function (resolve) {
+      if (!entry) return resolve();
+      if (entry.isFile) { entry.file(function (f) { out.push({ file: f, sub: base + f.name }); resolve(); }, function () { resolve(); }); }
+      else if (entry.isDirectory) {
+        var reader = entry.createReader(), gathered = [];
+        (function readBatch() {
+          reader.readEntries(function (ents) {
+            if (!ents || !ents.length) { Promise.all(gathered.map(function (e) { return readEntry(e, base + entry.name + "/", out); })).then(function () { resolve(); }); return; }
+            gathered = gathered.concat(Array.prototype.slice.call(ents)); readBatch();
+          }, function () { resolve(); });
+        })();
+      } else resolve();
+    });
+  }
+  function collectDropItems(dtItems) {
+    var out = [], jobs = [];
+    for (var i = 0; i < dtItems.length; i++) {
+      var it = dtItems[i];
+      var entry = it && (it.webkitGetAsEntry ? it.webkitGetAsEntry() : (it.getAsEntry ? it.getAsEntry() : null));
+      if (entry) jobs.push(readEntry(entry, "", out));
+      else if (it && it.kind === "file") { var f = it.getAsFile(); if (f) out.push({ file: f, sub: f.name }); }
+    }
+    return Promise.all(jobs).then(function () { return out; });
+  }
+
   function Explorer() {
     var s;
     s = useState(""); var cwd = s[0], setCwd = s[1];
@@ -194,6 +262,13 @@
     s = useState(null); var filePreview = s[0], setFilePreview = s[1];
     s = useState(false); var previewRaw = s[0], setPreviewRaw = s[1];
     s = useState([]); var stack = s[0], setStack = s[1];
+    s = useState([]); var uploads = s[0], setUploads = s[1];          // [{id,name,rel,pct,status,error}]
+    s = useState(false); var dragOver = s[0], setDragOver = s[1];
+    s = useState(false); var mkdirOpen = s[0], setMkdirOpen = s[1];
+    s = useState(""); var mkdirName = s[0], setMkdirName = s[1];
+    s = useState(null); var mkdirErr = s[0], setMkdirErr = s[1];
+    s = useState(false); var mkdirBusy = s[0], setMkdirBusy = s[1];
+    s = useState(null); var conflict = s[0], setConflict = s[1];      // {name,dir,resolve} | null
 
     var resolveCacheRef = useRef({});
     var indexRef = useRef(null);
@@ -201,6 +276,12 @@
     var stackRef = useRef([]); stackRef.current = stack;
     var cwdRef = useRef(""); cwdRef.current = cwd;
     var didInit = useRef(false);
+    var rootRef = useRef(""); if (dir && dir.root) rootRef.current = dir.root;   // absolute managed root, e.g. /opt/data
+    var fileInputRef = useRef(null);
+    var folderInputRef = useRef(null);
+    var conflictRef = useRef(null); conflictRef.current = conflict;
+    var bulkRef = useRef(null);          // remembered conflict decision for "apply to all"
+    var dragDepthRef = useRef(0);        // nested dragenter/leave counter
 
     // ── URL deep-linking ──
     function currentPluginPath() { return (typeof window !== "undefined" && window.location ? window.location.pathname : "") || (basePath() + "/file-explorer"); }
@@ -258,7 +339,15 @@
       setSearching(true);
       var go = function (idx) {
         var ql = q.toLowerCase();
-        var matches = idx.files.filter(function (f) { return f.rel.toLowerCase().indexOf(ql) !== -1; });
+        // "*" acts as a wildcard (any run of chars, incl. none). No "*" → plain substring (unchanged).
+        var re = null;
+        if (ql.indexOf("*") !== -1) {
+          try { re = new RegExp("^" + ql.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$"); } catch (e) { re = null; }
+        }
+        var test = re
+          ? function (f) { return re.test(f.name.toLowerCase()) || re.test(f.rel.toLowerCase()); }
+          : function (f) { return f.rel.toLowerCase().indexOf(ql) !== -1; };
+        var matches = idx.files.filter(test);
         matches.sort(function (a, b) { var an = a.name.toLowerCase() === ql, bn = b.name.toLowerCase() === ql; if (an !== bn) return an ? -1 : 1; return a.rel.length - b.rel.length; });
         setResults({ q: q, items: matches.slice(0, 500), total: matches.length, partial: idx.partial });
         setSearching(false);
@@ -266,6 +355,111 @@
       if (indexRef.current) go(indexRef.current);
       else buildIndex().then(function (idx) { indexRef.current = idx; go(idx); }).catch(function () { setResults({ q: q, items: [], total: 0 }); setSearching(false); });
     }
+
+    // ── create folder ──
+    function existingNamesInCwd() { var set = {}; ((dir && dir.entries) || []).forEach(function (e) { set[String(e.name).toLowerCase()] = 1; }); return set; }
+    function submitMkdir() {
+      var name = String(mkdirName || "").trim().replace(/^\/+|\/+$/g, "");
+      if (!name) { setMkdirErr("Bitte einen Namen eingeben."); return; }
+      if (/[\\]/.test(name) || name === "." || name === "..") { setMkdirErr("Ung\u00fcltiger Ordnername."); return; }
+      if (existingNamesInCwd()[name.toLowerCase()]) { setMkdirErr("Ein Eintrag mit diesem Namen existiert bereits."); return; }
+      var absDir = joinAbs(rootRef.current, (cwd ? cwd + "/" : "") + name);
+      setMkdirBusy(true); setMkdirErr(null);
+      mkdirReq(absDir).then(function () {
+        setMkdirBusy(false); setMkdirOpen(false); setMkdirName(""); indexRef.current = null; loadDir(cwd);
+      }).catch(function (e) { setMkdirBusy(false); setMkdirErr("Konnte Ordner nicht erstellen: " + ((e && e.message) || "Fehler")); });
+    }
+
+    // ── uploads ──
+    function askConflict(name, dirRel) {
+      if (bulkRef.current) return Promise.resolve(bulkRef.current);
+      return new Promise(function (resolve) {
+        setConflict({ name: name, dir: dirRel || "/", resolve: resolve });
+      });
+    }
+    function resolveConflict(decision, applyAll) {
+      var c = conflictRef.current; if (!c) return;
+      if (applyAll) bulkRef.current = decision;
+      setConflict(null);
+      c.resolve(decision);
+    }
+    // load (cached) set of names for a relative dir, to detect overwrite conflicts
+    function namesForDir(cacheRef, relDir) {
+      relDir = String(relDir || "").replace(/^\/+|\/+$/g, "");
+      if (cacheRef[relDir]) return Promise.resolve(cacheRef[relDir]);
+      return listDir(relDir).then(function (r) { var set = {}; ((r && r.entries) || []).forEach(function (e) { set[String(e.name).toLowerCase()] = 1; }); cacheRef[relDir] = set; return set; })
+        .catch(function () { var set = {}; cacheRef[relDir] = set; return set; });
+    }
+    function upsertUpload(id, patch) { setUploads(function (list) { var found = false, next = list.map(function (u) { if (u.id === id) { found = true; return Object.assign({}, u, patch); } return u; }); if (!found) next = next.concat([Object.assign({ id: id }, patch)]); return next; }); }
+
+    // items: [{file, sub}] where sub = path relative to cwd (may contain subdirs)
+    function runUpload(items) {
+      if (!items || !items.length) return;
+      bulkRef.current = null;
+      var root = rootRef.current;
+      if (!root) { // ensure we know the absolute root
+        listDir(cwd).then(function (r) { if (r && r.root) rootRef.current = r.root; runUpload(items); });
+        return;
+      }
+      var namesCache = {};
+      // pre-register rows
+      var rows = items.map(function (it, i) {
+        var rel = (cwd ? cwd + "/" : "") + it.sub.replace(/^\/+/, "");
+        return { id: "u" + Date.now() + "_" + i, file: it.file, sub: it.sub, rel: rel, dirRel: dirnameOf(rel) };
+      });
+      rows.forEach(function (r) { upsertUpload(r.id, { name: basenameOf(r.rel), rel: r.rel, pct: 0, status: "queued" }); });
+
+      // 1) create needed sub-directories (parents first), ignore "already exists"
+      var dirs = {}; rows.forEach(function (r) { if (r.dirRel) dirs[r.dirRel] = 1; });
+      var dirList = Object.keys(dirs).sort(function (a, b) { return a.split("/").length - b.split("/").length; });
+      var mkChain = dirList.reduce(function (p, d) { return p.then(function () { return mkdirReq(joinAbs(root, d)).catch(function () {}); }); }, Promise.resolve());
+
+      // 2) sequentially resolve conflicts + upload
+      mkChain.then(function () {
+        return rows.reduce(function (p, r) {
+          return p.then(function () {
+            return namesForDir(namesCache, r.dirRel).then(function (names) {
+              var targetName = basenameOf(r.rel);
+              if (names[targetName.toLowerCase()]) {
+                return askConflict(targetName, r.dirRel).then(function (decision) {
+                  if (decision === "skip") { upsertUpload(r.id, { status: "skipped" }); return null; }
+                  if (decision === "keep") { targetName = uniqueName(targetName, names); r.rel = (r.dirRel ? r.dirRel + "/" : "") + targetName; upsertUpload(r.id, { name: targetName, rel: r.rel }); }
+                  // overwrite → same name, server replaces
+                  names[targetName.toLowerCase()] = 1;
+                  return doOne(r, root);
+                });
+              }
+              names[targetName.toLowerCase()] = 1;
+              return doOne(r, root);
+            });
+          });
+        }, Promise.resolve());
+      }).then(function () { indexRef.current = null; loadDir(cwd); });
+
+      function doOne(r, rootAbs) {
+        upsertUpload(r.id, { status: "uploading", pct: 0 });
+        var abs = joinAbs(rootAbs, r.rel);
+        return uploadReq(abs, r.file, function (frac) { upsertUpload(r.id, { pct: Math.round(frac * 100) }); })
+          .then(function () { upsertUpload(r.id, { status: "done", pct: 100 }); })
+          .catch(function (e) { upsertUpload(r.id, { status: "error", error: (e && e.message) || "Fehler" }); });
+      }
+    }
+
+    function onPickFiles(ev) { var fl = ev.target.files; if (!fl || !fl.length) return; var items = Array.prototype.map.call(fl, function (f) { return { file: f, sub: f.webkitRelativePath || f.name }; }); ev.target.value = ""; runUpload(items); }
+    function onDrop(ev) {
+      ev.preventDefault(); ev.stopPropagation(); dragDepthRef.current = 0; setDragOver(false);
+      var dt = ev.dataTransfer; if (!dt) return;
+      if (dt.items && dt.items.length && (dt.items[0].webkitGetAsEntry || dt.items[0].getAsEntry)) {
+        collectDropItems(dt.items).then(function (items) { if (items.length) runUpload(items); });
+      } else if (dt.files && dt.files.length) {
+        runUpload(Array.prototype.map.call(dt.files, function (f) { return { file: f, sub: f.name }; }));
+      }
+    }
+    function onDragEnter(ev) { ev.preventDefault(); dragDepthRef.current++; if (ev.dataTransfer && Array.prototype.indexOf.call(ev.dataTransfer.types || [], "Files") !== -1) setDragOver(true); }
+    function onDragOver(ev) { ev.preventDefault(); if (ev.dataTransfer) { try { ev.dataTransfer.dropEffect = "copy"; } catch (e) {} } }
+    function onDragLeave(ev) { dragDepthRef.current = Math.max(0, dragDepthRef.current - 1); if (dragDepthRef.current === 0) setDragOver(false); }
+    function clearFinishedUploads() { setUploads(function (list) { return list.filter(function (u) { return u.status === "uploading" || u.status === "queued"; }); }); }
+
 
     // init from URL once
     useEffect(function () {
@@ -302,12 +496,23 @@
     function rowStyle() { return { display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid " + borderC, cursor: "pointer", textDecoration: "none", color: "inherit" }; }
 
     // ── directory listing ──
+    function goUp() {
+      var parent = cwd ? cwd.split("/").slice(0, -1).join("/") : "";
+      setQuery(""); setResults(null); setCwd(parent);
+    }
+    function upRow() {
+      if (!cwd) return null; // already at root — nothing above
+      return h("div", { key: "__up__", onClick: goUp, title: "Up to parent folder", style: rowStyle(), onMouseEnter: function (ev) { ev.currentTarget.style.background = bgMuted; }, onMouseLeave: function (ev) { ev.currentTarget.style.background = "transparent"; } },
+        h("span", { style: { color: accent, display: "inline-flex", flex: "0 0 auto" } }, ic(["M9 14 4 9l5-5", "M20 20v-7a4 4 0 0 0-4-4H4"], 18)),
+        h("span", { style: { flex: "1 1 auto", minWidth: 0, fontSize: 13.5, fontFamily: "var(--font-courier, monospace)", color: muted } }, ".."));
+    }
     function listView() {
       if (dirLoading && !dir) return h("div", { style: { padding: 20, color: muted, fontSize: 13 } }, "Loading\u2026");
-      var entries = (dir && dir.entries) || [];
       if (dirErr) return h("div", { style: { padding: 20, color: "#f87171", fontSize: 13 } }, "Could not open folder: " + dirErr);
-      if (!entries.length) return h("div", { style: { padding: 20, color: muted, fontSize: 13 } }, "This folder is empty.");
-      return h("div", null, entries.map(function (e, i) {
+      var entries = (dir && dir.entries) || [];
+      var up = upRow();
+      if (!entries.length) return h("div", null, up, h("div", { style: { padding: 20, color: muted, fontSize: 13 } }, "This folder is empty."));
+      return h("div", null, up, entries.map(function (e, i) {
         var isDir = e.is_directory;
         return h("div", { key: i, onClick: function () { openEntry(e); }, style: rowStyle(), onMouseEnter: function (ev) { ev.currentTarget.style.background = bgMuted; }, onMouseLeave: function (ev) { ev.currentTarget.style.background = "transparent"; } },
           h("span", { style: { color: isDir ? accent : muted, display: "inline-flex", flex: "0 0 auto" } }, isDir ? FolderIcon(18) : FileIcon(18)),
@@ -363,15 +568,83 @@
           h("div", { style: { flex: "1 1 auto", overflow: "auto", padding: "18px 22px" } }, body)));
     }
 
+    // ── action bar / upload UI ──
+    function toolBtn() { return { flex: "0 0 auto", display: "inline-flex", alignItems: "center", gap: 6, background: bgMuted, color: "inherit", border: "1px solid " + borderC, borderRadius: 9, padding: "8px 12px", fontSize: 12.5, cursor: "pointer" }; }
+    function actionBar() {
+      return h("div", { style: { display: "inline-flex", alignItems: "center", gap: 8, flex: "0 0 auto", flexWrap: "wrap" } },
+        h("input", { ref: fileInputRef, type: "file", multiple: true, onChange: onPickFiles, style: { display: "none" } }),
+        h("input", { ref: function (el) { folderInputRef.current = el; if (el) { try { el.setAttribute("webkitdirectory", ""); el.setAttribute("directory", ""); el.setAttribute("mozdirectory", ""); } catch (e) {} } }, type: "file", multiple: true, onChange: onPickFiles, style: { display: "none" } }),
+        h("button", { onClick: function () { if (fileInputRef.current) fileInputRef.current.click(); }, title: "Dateien hochladen", style: toolBtn() }, UploadIcon(15), "Dateien"),
+        h("button", { onClick: function () { if (folderInputRef.current) folderInputRef.current.click(); }, title: "Ordner hochladen \u2014 Struktur bleibt erhalten", style: toolBtn() }, UploadFolderIcon(15), "Ordner"),
+        h("button", { onClick: function () { setMkdirName(""); setMkdirErr(null); setMkdirOpen(true); }, title: "Neuen Ordner erstellen", style: toolBtn() }, FolderPlusIcon(15), "Neuer Ordner"));
+    }
+    function dropOverlay() {
+      return h("div", { style: { position: "absolute", inset: 0, zIndex: 20, background: "rgba(99,102,241,.10)", border: "2px dashed " + accent, borderRadius: 12, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, pointerEvents: "none", backdropFilter: "blur(1px)" } },
+        h("span", { style: { color: accent, display: "inline-flex" } }, UploadIcon(30)),
+        h("div", { style: { fontSize: 14, fontWeight: 700 } }, "Dateien oder Ordner hier ablegen"),
+        h("div", { style: { fontSize: 12, color: muted, fontFamily: "var(--font-courier, monospace)" } }, "Upload nach /" + (cwd || "")));
+    }
+    function uploadPanel() {
+      if (!uploads.length) return null;
+      var active = uploads.filter(function (u) { return u.status === "uploading" || u.status === "queued"; }).length;
+      var done = uploads.filter(function (u) { return u.status === "done"; }).length;
+      var errs = uploads.filter(function (u) { return u.status === "error"; }).length;
+      return h("div", { style: { border: "1px solid " + borderC, borderRadius: 12, background: cardBg, marginBottom: 10, overflow: "hidden", flex: "0 0 auto" } },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid " + borderC, fontSize: 12.5 } },
+          h("span", { style: { fontWeight: 700 } }, active ? ("L\u00e4dt hoch \u2026 " + active + " offen") : "Uploads"),
+          h("span", { style: { color: muted } }, done + " fertig" + (errs ? (" \u00b7 " + errs + " Fehler") : "")),
+          h("span", { style: { flex: 1 } }),
+          active ? null : h("button", { onClick: clearFinishedUploads, style: { background: "transparent", border: "1px solid " + borderC, color: muted, borderRadius: 8, padding: "5px 10px", fontSize: 12, cursor: "pointer" } }, "Ausblenden")),
+        h("div", { style: { maxHeight: 190, overflow: "auto" } }, uploads.map(function (u) {
+          var col = u.status === "done" ? "#22c55e" : u.status === "error" ? "#f87171" : u.status === "skipped" ? muted : accent;
+          return h("div", { key: u.id, style: { padding: "7px 12px", borderBottom: "1px solid " + borderC } },
+            h("div", { style: { display: "flex", gap: 8, fontSize: 12 } },
+              h("span", { style: { flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: u.rel }, u.rel || u.name),
+              h("span", { style: { flex: "0 0 auto", color: col } }, u.status === "done" ? "fertig" : u.status === "error" ? (u.error || "Fehler") : u.status === "skipped" ? "\u00fcbersprungen" : ((u.pct || 0) + "%"))),
+            (u.status === "uploading" || u.status === "queued" || u.status === "done") ? h("div", { style: { height: 4, background: bgMuted, borderRadius: 3, marginTop: 5, overflow: "hidden" } }, h("div", { style: { height: "100%", width: (u.pct || 0) + "%", background: col, transition: "width .15s" } })) : null);
+        })));
+    }
+    function mkdirModal() {
+      if (!mkdirOpen) return null;
+      return h("div", { onClick: function () { if (!mkdirBusy) setMkdirOpen(false); }, style: { position: "fixed", inset: 0, zIndex: 2147483500, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 } },
+        h("div", { onClick: function (e) { e.stopPropagation(); }, style: { width: "min(440px, 94vw)", background: cardBg, border: "1px solid " + borderC, borderRadius: 14, boxShadow: "0 24px 70px rgba(0,0,0,.6)", padding: 18 } },
+          h("div", { style: { fontSize: 15, fontWeight: 700, marginBottom: 4 } }, "Neuer Ordner"),
+          h("div", { style: { fontSize: 12, color: muted, marginBottom: 12, fontFamily: "var(--font-courier, monospace)" } }, "in /" + (cwd || "")),
+          h("input", { autoFocus: true, value: mkdirName, onChange: function (e) { setMkdirName(e.target.value); setMkdirErr(null); }, onKeyDown: function (e) { if (e.key === "Enter") submitMkdir(); else if (e.key === "Escape" && !mkdirBusy) setMkdirOpen(false); }, placeholder: "Ordnername", style: { width: "100%", boxSizing: "border-box", padding: "9px 11px", background: bgMuted, border: "1px solid " + (mkdirErr ? "#f87171" : borderC), borderRadius: 9, color: "inherit", fontSize: 13.5, outline: "none" } }),
+          mkdirErr ? h("div", { style: { color: "#f87171", fontSize: 12, marginTop: 7 } }, mkdirErr) : null,
+          h("div", { style: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 } },
+            h("button", { onClick: function () { if (!mkdirBusy) setMkdirOpen(false); }, style: { background: "transparent", border: "1px solid " + borderC, color: muted, borderRadius: 9, padding: "8px 14px", fontSize: 12.5, cursor: "pointer" } }, "Abbrechen"),
+            h("button", { onClick: submitMkdir, style: { background: accent, border: "1px solid " + accent, color: "#fff", borderRadius: 9, padding: "8px 16px", fontSize: 12.5, cursor: "pointer", opacity: mkdirBusy ? .7 : 1 } }, mkdirBusy ? "\u2026" : "Erstellen"))));
+    }
+    function cbtn(c) { return { background: "transparent", border: "1px solid " + borderC, color: c, borderRadius: 9, padding: "8px 14px", fontSize: 12.5, cursor: "pointer" }; }
+    function applyAllChecked() { var el = (typeof document !== "undefined") ? document.getElementById("__bhfe_applyall") : null; return !!(el && el.checked); }
+    function conflictModal() {
+      if (!conflict) return null;
+      return h("div", { style: { position: "fixed", inset: 0, zIndex: 2147483500, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 } },
+        h("div", { style: { width: "min(470px, 94vw)", background: cardBg, border: "1px solid " + borderC, borderRadius: 14, boxShadow: "0 24px 70px rgba(0,0,0,.6)", padding: 18 } },
+          h("div", { style: { fontSize: 15, fontWeight: 700, marginBottom: 6 } }, "Datei existiert bereits"),
+          h("div", { style: { fontSize: 13, lineHeight: 1.55, marginBottom: 14 } }, "\u201e", h("b", null, conflict.name), "\u201c existiert bereits in ", h("span", { style: { fontFamily: "var(--font-courier, monospace)", color: muted } }, "/" + (conflict.dir || "")), ". Was m\u00f6chtest du tun?"),
+          h("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: muted, marginBottom: 14, cursor: "pointer" } },
+            h("input", { type: "checkbox", id: "__bhfe_applyall" }), "F\u00fcr alle weiteren Konflikte \u00fcbernehmen"),
+          h("div", { style: { display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 } },
+            h("button", { onClick: function () { resolveConflict("skip", applyAllChecked()); }, style: cbtn(muted) }, "\u00dcberspringen"),
+            h("button", { onClick: function () { resolveConflict("keep", applyAllChecked()); }, style: cbtn("inherit") }, "Beide behalten"),
+            h("button", { onClick: function () { resolveConflict("overwrite", applyAllChecked()); }, style: Object.assign(cbtn("#fff"), { background: accent, borderColor: accent }) }, "\u00dcberschreiben"))));
+    }
+
     return h("div", { style: { display: "flex", flexDirection: "column", height: "100%", fontFamily: "inherit" } },
       h("div", { style: { display: "flex", alignItems: "center", gap: 12, padding: "12px 4px 14px", flexWrap: "wrap" } },
-        h("div", { style: { flex: "1 1 auto", minWidth: 0 } }, crumb()),
+        h("div", { style: { flex: "1 1 auto", minWidth: 160 } }, crumb()),
+        actionBar(),
         h("div", { style: { flex: "0 0 auto", position: "relative", display: "inline-flex", alignItems: "center" } },
           h("span", { style: { position: "absolute", left: 10, color: muted, display: "inline-flex", pointerEvents: "none" } }, SearchIcon(15)),
-          h("input", { value: query, onChange: function (e) { setQuery(e.target.value); }, placeholder: "Search files\u2026", style: { width: 260, maxWidth: "60vw", padding: "8px 30px 8px 32px", background: bgMuted, border: "1px solid " + borderC, borderRadius: 9, color: "inherit", fontSize: 13, outline: "none" } }),
+          h("input", { value: query, onChange: function (e) { setQuery(e.target.value); }, placeholder: "Search files\u2026  (* = wildcard)", style: { width: 260, maxWidth: "60vw", padding: "8px 30px 8px 32px", background: bgMuted, border: "1px solid " + borderC, borderRadius: 9, color: "inherit", fontSize: 13, outline: "none" } }),
           query ? h("button", { onClick: function () { setQuery(""); setResults(null); }, title: "Clear", style: { position: "absolute", right: 6, background: "transparent", border: "none", color: muted, cursor: "pointer", display: "inline-flex", padding: 2 } }, XIcon(15)) : null)),
-      h("div", { style: { flex: "1 1 auto", overflow: "auto", border: "1px solid " + borderC, borderRadius: 12, background: cardBg } }, query ? resultsView() : listView()),
-      viewer());
+      uploadPanel(),
+      h("div", { onDragEnter: onDragEnter, onDragOver: onDragOver, onDragLeave: onDragLeave, onDrop: onDrop, style: { flex: "1 1 auto", position: "relative", overflow: "auto", border: "1px solid " + borderC, borderRadius: 12, background: cardBg, minHeight: 0 } },
+        query ? resultsView() : listView(),
+        dragOver ? dropOverlay() : null),
+      viewer(), mkdirModal(), conflictModal());
   }
 
   window.__HERMES_PLUGINS__.register("fileexplorer", Explorer);
