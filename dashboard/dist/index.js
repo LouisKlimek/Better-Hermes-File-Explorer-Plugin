@@ -258,6 +258,68 @@
     return Promise.all(jobs).then(function () { return out; });
   }
 
+  // ── minimal ZIP writer: DEFLATE via native CompressionStream when available, else STORE ──
+  var CRC_TABLE = (function () { var t = []; for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
+  function crc32(bytes) { var c = 0xFFFFFFFF; for (var i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+  function deflateRaw(bytes) {
+    try {
+      if (typeof CompressionStream === "undefined" || typeof Response === "undefined") return Promise.resolve(null);
+      var cs = new CompressionStream("deflate-raw");
+      return new Response(new Blob([bytes]).stream().pipeThrough(cs)).arrayBuffer().then(function (ab) { return new Uint8Array(ab); }).catch(function () { return null; });
+    } catch (e) { return Promise.resolve(null); }
+  }
+  function _u16(n) { return [n & 0xFF, (n >>> 8) & 0xFF]; }
+  function _u32(n) { return [n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF, (n >>> 24) & 0xFF]; }
+  function dataUrlToBytes(dataUrl) { var b64 = String(dataUrl || "").split(",")[1] || ""; var bin = atob(b64); var arr = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i); return arr; }
+  // entries: [{name, data:Uint8Array}] → Promise<Blob>
+  function buildZip(entries) {
+    var enc = new TextEncoder(), chunks = [], central = [], offset = 0;
+    var seq = entries.reduce(function (p, ent) {
+      return p.then(function () {
+        var nameBytes = enc.encode(ent.name), crc = crc32(ent.data), uncomp = ent.data.length;
+        return deflateRaw(ent.data).then(function (def) {
+          var method = 0, data = ent.data;
+          if (def && def.length < uncomp) { method = 8; data = def; }
+          var comp = data.length, flags = 0x0800;
+          var local = [].concat(_u32(0x04034b50), _u16(20), _u16(flags), _u16(method), _u16(0), _u16(0), _u32(crc), _u32(comp), _u32(uncomp), _u16(nameBytes.length), _u16(0));
+          var localHead = new Uint8Array(local);
+          chunks.push(localHead, nameBytes, data);
+          var localOffset = offset; offset += localHead.length + nameBytes.length + data.length;
+          var cen = [].concat(_u32(0x02014b50), _u16(20), _u16(20), _u16(flags), _u16(method), _u16(0), _u16(0), _u32(crc), _u32(comp), _u32(uncomp), _u16(nameBytes.length), _u16(0), _u16(0), _u16(0), _u16(0), _u32(0), _u32(localOffset));
+          central.push({ head: new Uint8Array(cen), name: nameBytes });
+        });
+      });
+    }, Promise.resolve());
+    return seq.then(function () {
+      var cdStart = offset, cdSize = 0;
+      central.forEach(function (c) { chunks.push(c.head, c.name); cdSize += c.head.length + c.name.length; });
+      chunks.push(new Uint8Array([].concat(_u32(0x06054b50), _u16(0), _u16(0), _u16(central.length), _u16(central.length), _u32(cdSize), _u32(cdStart), _u16(0))));
+      return new Blob(chunks, { type: "application/zip" });
+    });
+  }
+  // Recursively list every file under a folder (bounded). Returns {files:[{rel,size}], partial}.
+  function collectFolderFiles(startRel) {
+    startRel = String(startRel || "").replace(/^\/+|\/+$/g, "");
+    var files = [], rootPath = null, listings = 0, MAX = 2500, MAX_DEPTH = 24;
+    var queue = [{ d: startRel, depth: 0 }], seen = {}; seen[startRel] = 1;
+    function relOf(e) { if (rootPath && e.path && e.path.indexOf(rootPath) === 0) return e.path.slice(rootPath.length).replace(/^\/+/, ""); return (startRel ? startRel + "/" : "") + e.name; }
+    function step() {
+      if (!queue.length || listings >= MAX) return Promise.resolve();
+      var wave = []; while (queue.length && wave.length < 10 && listings < MAX) { wave.push(queue.shift()); listings++; }
+      return Promise.all(wave.map(function (item) {
+        return listDir(item.d).catch(function () { return null; }).then(function (r) {
+          if (!r) return; if (rootPath == null && r.root) rootPath = r.root;
+          (r.entries || []).forEach(function (e) {
+            var rr = relOf(e);
+            if (e.is_directory) { if (item.depth < MAX_DEPTH && !SKIP[e.name] && !seen[rr]) { seen[rr] = 1; queue.push({ d: rr, depth: item.depth + 1 }); } }
+            else files.push({ rel: rr, size: e.size });
+          });
+        });
+      })).then(step);
+    }
+    return step().then(function () { return { files: files, partial: listings >= MAX }; });
+  }
+
   function Explorer() {
     var s;
     s = useState(""); var cwd = s[0], setCwd = s[1];
@@ -280,6 +342,7 @@
     s = useState(null); var del = s[0], setDel = s[1];                // {rel,name,isDir} | null
     s = useState(false); var delBusy = s[0], setDelBusy = s[1];
     s = useState(null); var delErr = s[0], setDelErr = s[1];
+    s = useState(null); var zip = s[0], setZip = s[1];               // {name,phase,done,total,skipped,partial,error} | null
 
     var resolveCacheRef = useRef({});
     var indexRef = useRef(null);
@@ -320,7 +383,7 @@
         .catch(function () {
           setFilePreview({ path: path, loading: true, searching: true });
           resolveFilePath(clean, resolveCacheRef).then(function (resolved) {
-            if (resolved && resolved !== clean) { readFile(resolved).then(function (r) { setFilePreview(Object.assign({ path: resolved, orig: path, loading: false }, parseRead(resolved, r))); }).catch(function (e) { setFilePreview({ path: path, loading: false, err: (e && e.message) || "not found" }); }); }
+            if (resolved && resolved !== clean) { setCwd(dirOf(resolved)); readFile(resolved).then(function (r) { setFilePreview(Object.assign({ path: resolved, orig: path, loading: false }, parseRead(resolved, r))); }).catch(function (e) { setFilePreview({ path: path, loading: false, err: (e && e.message) || "not found" }); }); }
             else setFilePreview({ path: path, loading: false, err: "not found", searchedNoMatch: true });
           }).catch(function () { setFilePreview({ path: path, loading: false, err: "not found" }); });
         });
@@ -485,6 +548,37 @@
       }).catch(function (e) { setDelBusy(false); setDelErr("Konnte nicht l\u00f6schen: " + ((e && e.message) || "Fehler")); });
     }
 
+    // ── download a whole folder as a .zip (client-side) ──
+    function downloadFolder(folderRel, folderName) {
+      folderRel = String(folderRel).replace(/^\/+|\/+$/g, "");
+      var stripLen = dirnameOf(folderRel).length ? (dirnameOf(folderRel).length + 1) : 0; // keep folderName/... in the zip
+      setZip({ name: folderName, phase: "listing", done: 0, total: 0 });
+      collectFolderFiles(folderRel).then(function (res) {
+        var list = res.files;
+        if (!list.length) { setZip({ name: folderName, phase: "error", error: "Ordner ist leer oder nicht lesbar." }); return; }
+        setZip({ name: folderName, phase: "reading", done: 0, total: list.length, partial: res.partial });
+        var entries = [], skipped = 0, done = 0;
+        var seq = list.reduce(function (p, f) {
+          return p.then(function () {
+            return readFile(f.rel).then(function (r) {
+              entries.push({ name: f.rel.slice(stripLen), data: dataUrlToBytes(r && r.data_url) });
+            }).catch(function () { skipped++; }).then(function () { done++; setZip(function (z) { return (z && z.name === folderName) ? Object.assign({}, z, { done: done }) : z; }); });
+          });
+        }, Promise.resolve());
+        seq.then(function () {
+          if (!entries.length) { setZip({ name: folderName, phase: "error", error: "Keine Datei lesbar (evtl. zu gro\u00df)." }); return; }
+          setZip(function (z) { return (z && z.name === folderName) ? Object.assign({}, z, { phase: "packing" }) : z; });
+          buildZip(entries).then(function (blob) {
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement("a"); a.href = url; a.download = folderName + ".zip"; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 4000);
+            setZip({ name: folderName, phase: "done", done: entries.length, total: list.length, skipped: skipped, partial: res.partial });
+            setTimeout(function () { setZip(function (z) { return (z && z.phase === "done" && z.name === folderName) ? null : z; }); }, 5000);
+          }).catch(function (e) { setZip({ name: folderName, phase: "error", error: (e && e.message) || "ZIP fehlgeschlagen" }); });
+        });
+      }).catch(function (e) { setZip({ name: folderName, phase: "error", error: (e && e.message) || "Fehler beim Auslesen" }); });
+    }
+
 
     // init from URL once
     useEffect(function () {
@@ -535,7 +629,9 @@
     function actionBtnStyle(c) { return { display: "inline-flex", alignItems: "center", justifyContent: "center", background: "transparent", border: "none", color: c || muted, textDecoration: "none", cursor: "pointer", padding: 5, borderRadius: 7 }; }
     function rowActions(rel, name, isDir) {
       return h("span", { style: { flex: "0 0 auto", display: "inline-flex", alignItems: "center", gap: 1 } },
-        isDir ? null : h("a", { href: filesDownloadHref(rel), target: "_blank", rel: "noopener noreferrer", title: "Download", onClick: function (ev) { ev.stopPropagation(); }, style: actionBtnStyle(muted), onMouseEnter: function (ev) { ev.currentTarget.style.color = accent; }, onMouseLeave: function (ev) { ev.currentTarget.style.color = muted; } }, DownloadIcon(16)),
+        isDir
+          ? h("button", { title: "Ordner als ZIP herunterladen", onClick: function (ev) { ev.stopPropagation(); downloadFolder(rel, name); }, style: actionBtnStyle(muted), onMouseEnter: function (ev) { ev.currentTarget.style.color = accent; }, onMouseLeave: function (ev) { ev.currentTarget.style.color = muted; } }, DownloadIcon(16))
+          : h("a", { href: filesDownloadHref(rel), target: "_blank", rel: "noopener noreferrer", title: "Download", onClick: function (ev) { ev.stopPropagation(); }, style: actionBtnStyle(muted), onMouseEnter: function (ev) { ev.currentTarget.style.color = accent; }, onMouseLeave: function (ev) { ev.currentTarget.style.color = muted; } }, DownloadIcon(16)),
         h("button", { title: isDir ? "Ordner l\u00f6schen" : "Datei l\u00f6schen", onClick: function (ev) { ev.stopPropagation(); askDelete(rel, name, isDir); }, style: actionBtnStyle(muted), onMouseEnter: function (ev) { ev.currentTarget.style.color = "#f87171"; }, onMouseLeave: function (ev) { ev.currentTarget.style.color = muted; } }, TrashIcon(16)));
     }
     function listView() {
@@ -638,6 +734,22 @@
             (u.status === "uploading" || u.status === "queued" || u.status === "done") ? h("div", { style: { height: 4, background: bgMuted, borderRadius: 3, marginTop: 5, overflow: "hidden" } }, h("div", { style: { height: "100%", width: (u.pct || 0) + "%", background: col, transition: "width .15s" } })) : null);
         })));
     }
+    function zipIndicator() {
+      if (!zip) return null;
+      var pct = zip.total ? Math.round((zip.done / zip.total) * 100) : 0;
+      var label = zip.phase === "listing" ? "Ordner wird gelesen \u2026"
+        : zip.phase === "reading" ? ("Lese Dateien \u2026 " + zip.done + "/" + zip.total)
+        : zip.phase === "packing" ? "Packe ZIP \u2026"
+        : zip.phase === "done" ? ("\u201e" + zip.name + ".zip\u201c heruntergeladen" + (zip.skipped ? (" \u00b7 " + zip.skipped + " \u00fcbersprungen") : "") + (zip.partial ? " \u00b7 Ordner sehr gro\u00df, evtl. unvollst\u00e4ndig" : ""))
+        : zip.phase === "error" ? ("ZIP fehlgeschlagen: " + (zip.error || "Fehler")) : "";
+      var col = zip.phase === "error" ? "#f87171" : zip.phase === "done" ? "#22c55e" : accent;
+      return h("div", { style: { border: "1px solid " + borderC, borderRadius: 12, background: cardBg, marginBottom: 10, overflow: "hidden", flex: "0 0 auto" } },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", fontSize: 12.5 } },
+          h("span", { style: { color: col, display: "inline-flex", flex: "0 0 auto" } }, DownloadIcon(15)),
+          h("span", { style: { flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, label),
+          (zip.phase === "done" || zip.phase === "error") ? h("button", { onClick: function () { setZip(null); }, style: { background: "transparent", border: "1px solid " + borderC, color: muted, borderRadius: 8, padding: "5px 10px", fontSize: 12, cursor: "pointer" } }, "Ausblenden") : null),
+        (zip.phase === "reading") ? h("div", { style: { height: 4, background: bgMuted, overflow: "hidden" } }, h("div", { style: { height: "100%", width: pct + "%", background: col, transition: "width .15s" } })) : null);
+    }
     function mkdirModal() {
       if (!mkdirOpen) return null;
       return h("div", { onClick: function () { if (!mkdirBusy) setMkdirOpen(false); }, style: { position: "fixed", inset: 0, zIndex: 2147483500, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 } },
@@ -688,6 +800,7 @@
           h("input", { value: query, onChange: function (e) { setQuery(e.target.value); }, placeholder: "Search files\u2026  (* = wildcard)", style: { width: 260, maxWidth: "60vw", padding: "8px 30px 8px 32px", background: bgMuted, border: "1px solid " + borderC, borderRadius: 9, color: "inherit", fontSize: 13, outline: "none" } }),
           query ? h("button", { onClick: function () { setQuery(""); setResults(null); }, title: "Clear", style: { position: "absolute", right: 6, background: "transparent", border: "none", color: muted, cursor: "pointer", display: "inline-flex", padding: 2 } }, XIcon(15)) : null)),
       uploadPanel(),
+      zipIndicator(),
       h("div", { onDragEnter: onDragEnter, onDragOver: onDragOver, onDragLeave: onDragLeave, onDrop: onDrop, style: { flex: "1 1 auto", position: "relative", overflow: "auto", border: "1px solid " + borderC, borderRadius: 12, background: cardBg, minHeight: 0 } },
         query ? resultsView() : listView(),
         dragOver ? dropOverlay() : null),

@@ -3,11 +3,11 @@
 A drop-in **Files** tab for the [Hermes Agent](https://github.com/NousResearch/hermes-agent) dashboard.
 
 Browse the managed file tree, preview files inline, search filenames (with `*`
-wildcards) across the whole tree, **upload files and whole folders**, **create
-and delete folders/files**, and deep-link to any folder or file by URL — all
-without leaving the dashboard. It talks to the built-in core file API
-(`/api/files`), so there is **no backend to install** and nothing new to
-authenticate: it uses your existing dashboard session.
+wildcards) across the whole tree, **upload files and whole folders**, **download
+folders as a `.zip`**, **create and delete folders/files**, and deep-link to any
+folder or file by URL — all without leaving the dashboard. It talks to the
+built-in core file API (`/api/files`), so there is **no backend to install** and
+nothing new to authenticate: it uses your existing dashboard session.
 
 <p align="center">
   <img src="docs/screenshot-explorer.png" alt="Better Hermes File Explorer" width="820">
@@ -19,7 +19,14 @@ authenticate: it uses your existing dashboard session.
   layout) like a normal file manager: folders first, sizes, modified times, a
   clickable breadcrumb, and click-to-open. A **`..` row** at the top of every
   sub-folder jumps up to the parent. Each row has quick actions on the right: a
-  **download** button (files) and a **delete** (trash) button.
+  **download** button (files download directly; **folders download as a `.zip`**)
+  and a **delete** (trash) button.
+- **Download folders as ZIP** — the download button on a folder recursively reads
+  every file underneath it and packs them into a `.zip` **entirely in the
+  browser** (real DEFLATE compression via the native `CompressionStream` API,
+  falling back to a stored/uncompressed zip where that isn't available). A small
+  progress indicator shows read/pack status. Files the core can't read inline
+  (oversized) are skipped and reported; very large trees are bounded.
 - **Delete** — the per-row trash button removes a file or folder after a
   **confirmation prompt** (folders are deleted recursively, with the contents
   clearly called out in the prompt). The open viewer closes automatically if the
@@ -53,7 +60,9 @@ authenticate: it uses your existing dashboard session.
   directory (e.g. `feasibility-reviews/x.md` when the file really lives at
   `strategy-lab/pending/feasibility-reviews/x.md`). The viewer searches the tree
   and resolves the real path automatically, showing an "auto-resolved from …"
-  note.
+  note. When it resolves, the browser behind the viewer follows to the file's
+  **real folder**, so closing the viewer lands you in the right place (not on the
+  original, non-existent path).
 - **Filename search with `*` wildcards** — a search box that indexes the tree and
   finds files by substring anywhere in their path. Add `*` to match any run of
   characters: `*.md` finds everything ending in `.md`, `test*abc` matches names
