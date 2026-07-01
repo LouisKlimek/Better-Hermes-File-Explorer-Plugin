@@ -70,8 +70,12 @@ nothing new to authenticate: it uses your existing dashboard session.
   concurrency for a faster first resolve. The cache is self-contained (it never
   reads another plugin's data) and falls back to browser `localStorage` if the
   backend isn't mounted. Positive results kept 7 days, negatives 1 hour;
-  `DELETE /api/plugins/fileexplorer/pathcache` clears it. A trailing sentence
-  period is kept out of the link.
+  `DELETE /api/plugins/fileexplorer/pathcache` clears it. If the **Tasklist**
+  plugin is also installed, on load this plugin *additionally* reads that
+  plugin's cache (`/api/plugins/tasklist/pathcache`, best-effort, read-only) and
+  reuses any paths it already resolved — so a search done in either plugin speeds
+  up both, while neither ever writes to the other's DB (they stay independent). A
+  trailing sentence period is kept out of the link.
 - **Smart path resolution** — agents often write paths relative to their working
   directory (e.g. `feasibility-reviews/x.md` when the file really lives at
   `strategy-lab/pending/feasibility-reviews/x.md`). The viewer searches the tree

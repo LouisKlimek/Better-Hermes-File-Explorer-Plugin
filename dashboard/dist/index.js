@@ -98,6 +98,9 @@
   var FXAPI = "/api/plugins/fileexplorer";
   function pcRemoteGet() { return filesGet(FXAPI + "/pathcache"); }
   function pcRemotePut(cand, rec) { return authFetch(FXAPI + "/pathcache", { method: "PUT", headers: writeHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ cand: cand, state: rec.state, resolved: rec.resolved || null }) }).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }); }
+  // Best-effort read of the *Tasklist* plugin's cache, if it's installed. Purely additive:
+  // we never write to it, so the two plugins stay independent but share resolved paths when both exist.
+  function pcRemoteGetOther() { return filesGet("/api/plugins/tasklist/pathcache"); }
 
   // ── icons ──
   function ic(paths, sz, extra) { return h("svg", Object.assign({ width: sz || 16, height: sz || 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }, extra || {}), paths.map(function (d, i) { return h("path", { key: i, d: d }); })); }
@@ -411,15 +414,12 @@
     var cacheReadyRef = useRef(false);
     var backendRef = useRef(true);
     useEffect(function () {
-      pcRemoteGet().then(function (r) {
-        var e = (r && r.entries) || {};
-        Object.keys(e).forEach(function (k) { if (!(k in pathValidRef.current)) pathValidRef.current[k] = { state: e[k].state, resolved: e[k].resolved }; });
-        cacheReadyRef.current = true; setPathV(function (v) { return v + 1; });
-      }).catch(function () {
-        backendRef.current = false;
-        var ls = fxLoadCache(); Object.keys(ls).forEach(function (k) { if (!(k in pathValidRef.current)) pathValidRef.current[k] = ls[k]; });
-        cacheReadyRef.current = true; setPathV(function (v) { return v + 1; });
-      });
+      function merge(r) { var e = (r && r.entries) || {}; Object.keys(e).forEach(function (k) { if (!(k in pathValidRef.current)) pathValidRef.current[k] = { state: e[k].state, resolved: e[k].resolved }; }); }
+      var other = pcRemoteGetOther().catch(function () { return null; });   // Tasklist's cache, if present
+      pcRemoteGet().then(function (r) { backendRef.current = true; merge(r); })
+        .catch(function () { backendRef.current = false; var ls = fxLoadCache(); Object.keys(ls).forEach(function (k) { if (!(k in pathValidRef.current)) pathValidRef.current[k] = ls[k]; }); })
+        .then(function () { return other; })
+        .then(function (r) { if (r) merge(r); cacheReadyRef.current = true; setPathV(function (v) { return v + 1; }); });
     }, []);
     var searchChainRef = useRef(Promise.resolve());
     var pvSt = useState(0); var pathV = pvSt[0], setPathV = pvSt[1];
