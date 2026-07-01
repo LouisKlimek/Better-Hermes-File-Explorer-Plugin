@@ -63,7 +63,15 @@ nothing new to authenticate: it uses your existing dashboard session.
   `ToS/robots.txt`, `Normalisierungs-/Dedupe-/…`, `WDR/mitvergnuegen/Stadtmarketing`
   — stays plain text. Each text→link decision is **cached** per candidate, so the
   same path isn't re-checked on every render; unresolved candidates run the
-  detailed search once. A trailing sentence period is kept out of the link.
+  detailed search once. Resolved paths are persisted **server-side** in this plugin's own SQLite DB
+  (`$HERMES_HOME/fileexplorer/pathcache.db`, via `/api/plugins/fileexplorer/pathcache`),
+  so after the first lookup a link appears **instantly on reload** and across all
+  browsers/devices without re-searching; the tree walk also runs with higher
+  concurrency for a faster first resolve. The cache is self-contained (it never
+  reads another plugin's data) and falls back to browser `localStorage` if the
+  backend isn't mounted. Positive results kept 7 days, negatives 1 hour;
+  `DELETE /api/plugins/fileexplorer/pathcache` clears it. A trailing sentence
+  period is kept out of the link.
 - **Smart path resolution** — agents often write paths relative to their working
   directory (e.g. `feasibility-reviews/x.md` when the file really lives at
   `strategy-lab/pending/feasibility-reviews/x.md`). The viewer searches the tree
@@ -104,10 +112,15 @@ hermes plugin install https://github.com/LouisKlimek/Better-Hermes-File-Explorer
 Then refresh the dashboard's plugin list (Settings → rescan plugins, or hit
 `/api/dashboard/plugins/rescan`) and reload the page. A **Files** tab appears at `/file-explorer`.
 
-> This plugin is **frontend-only** — it has no `api` field, so a plugin rescan /
-> asset reload is enough; no `docker restart` is required. Upload and folder
-> creation use the core's own write endpoints, so they need no extra backend
-> either.
+> **Backend note.** As of v1.8.0 this plugin ships a small backend
+> (`dashboard/plugin_api.py`) for the server-side path-resolution cache, mounted
+> at `/api/plugins/fileexplorer/`. Plugin API routes are imported only when the
+> dashboard process **starts**, and only for plugins under `~/.hermes/plugins/`
+> (the `user` source). So after installing or updating, **restart
+> `hermes dashboard`** (a browser refresh or `rescan` alone won't mount the
+> backend). If the backend isn't mounted, the UI still works and simply falls
+> back to browser `localStorage` for the cache. Upload / folder creation / delete
+> still use the core's own write endpoints.
 
 Confirm it's live: `GET /api/dashboard/plugins` should list `"name":
 "fileexplorer"` with the current `version`.

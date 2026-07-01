@@ -75,6 +75,30 @@
   function fmtTime(t) { if (!t) return ""; try { var d = new Date(t * 1000); return d.toLocaleString(); } catch (e) { return ""; } }
   function isFilePath(p) { return /\.[A-Za-z0-9]{1,8}$/.test(String(p).split("/").pop()); }
 
+  // ── persistent path-resolution cache (survives page reloads) ──
+  var FX_LSKEY = "hermesPathCacheV1";
+  function fxLoadCache() {
+    try {
+      var raw = window.localStorage.getItem(FX_LSKEY); if (!raw) return {};
+      var o = JSON.parse(raw) || {}, now = Date.now(), out = {};
+      Object.keys(o).forEach(function (k) { var v = o[k]; if (!v) return; var ttl = v.state === "valid" ? 604800000 : 3600000; if (now - (v.t || 0) < ttl) out[k] = { state: v.state, resolved: v.resolved }; });
+      return out;
+    } catch (e) { return {}; }
+  }
+  function fxSaveCache(cand, rec) {
+    try {
+      var raw = window.localStorage.getItem(FX_LSKEY); var o = raw ? (JSON.parse(raw) || {}) : {};
+      o[cand] = { state: rec.state, resolved: rec.resolved, t: Date.now() };
+      var keys = Object.keys(o); if (keys.length > 3000) { keys.sort(function (a, b) { return (o[a].t || 0) - (o[b].t || 0); }); keys.slice(0, keys.length - 3000).forEach(function (k) { delete o[k]; }); }
+      window.localStorage.setItem(FX_LSKEY, JSON.stringify(o));
+    } catch (e) {}
+  }
+
+  // Server-side path-resolution cache (this plugin's own backend, /api/plugins/fileexplorer/pathcache).
+  var FXAPI = "/api/plugins/fileexplorer";
+  function pcRemoteGet() { return filesGet(FXAPI + "/pathcache"); }
+  function pcRemotePut(cand, rec) { return authFetch(FXAPI + "/pathcache", { method: "PUT", headers: writeHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ cand: cand, state: rec.state, resolved: rec.resolved || null }) }).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); }); }
+
   // ── icons ──
   function ic(paths, sz, extra) { return h("svg", Object.assign({ width: sz || 16, height: sz || 16, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }, extra || {}), paths.map(function (d, i) { return h("path", { key: i, d: d }); })); }
   function FolderIcon(sz) { return h("svg", { width: sz || 18, height: sz || 18, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" }, h("path", { d: "M4 4h5l2 3h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" })); }
@@ -179,6 +203,7 @@
     var firstDir = segs.length > 1 ? segs[0] : null; var restAfterFirst = segs.slice(1).join("/");
     var relDirSet = {}; segs.slice(0, -1).forEach(function (s) { relDirSet[s] = 1; });
     var rootPath = null, listings = 0, MAX = 600, MAX_DEPTH = 14;
+    var lastDir = segs.length >= 2 ? segs[segs.length - 2] : null;
     var pq = [], nq = [], seen = { "": 1 }; nq.push({ d: "", depth: 0 });
     var basenameHits = [], directTried = {};
     function relOf(e) { if (rootPath && e.path && e.path.indexOf(rootPath) === 0) return e.path.slice(rootPath.length).replace(/^\/+/, ""); return e.name; }
@@ -186,7 +211,7 @@
     function tryDirect(c) { if (directTried[c]) return Promise.resolve(null); directTried[c] = 1; return readFile(c).then(function () { return c; }).catch(function () { return null; }); }
     function loop() {
       if ((!pq.length && !nq.length) || listings >= MAX) return Promise.resolve(null);
-      var wave = []; while ((pq.length || nq.length) && wave.length < 8 && listings < MAX) { wave.push(pq.length ? pq.shift() : nq.shift()); listings++; }
+      var wave = []; while ((pq.length || nq.length) && wave.length < 24 && listings < MAX) { wave.push(pq.length ? pq.shift() : nq.shift()); listings++; }
       return Promise.all(wave.map(function (item) {
         return listDir(item.d).catch(function () { return null; }).then(function (r) {
           if (!r) return null; if (rootPath == null && r.root) rootPath = r.root;
@@ -194,7 +219,7 @@
           (r.entries || []).forEach(function (e) {
             var rr = relOf(e);
             if (e.is_directory) { if (firstDir && e.name === firstDir) cands.push(restAfterFirst ? (rr + "/" + restAfterFirst) : rr); if (item.depth < MAX_DEPTH && !SKIP[e.name]) enqueue(rr, item.depth + 1); }
-            else { if (rr === rel || (rr.length > rel.length && rr.slice(-(rel.length + 1)) === "/" + rel)) found = rr; else if (e.name === base) basenameHits.push(rr); }
+            else if (e.name === base) { if (rr === rel || (rr.length > rel.length && rr.slice(-(rel.length + 1)) === "/" + rel)) found = rr; else if (lastDir) { var tail = lastDir + "/" + base; if (rr === tail || (rr.length > tail.length && rr.slice(-(tail.length + 1)) === "/" + tail)) found = rr; else basenameHits.push(rr); } else basenameHits.push(rr); }
           });
           if (found) return found;
           if (cands.length) return Promise.all(cands.map(tryDirect)).then(function (rs) { return rs.filter(Boolean)[0] || null; });
@@ -224,7 +249,7 @@
     function tryDirect(c) { if (directTried[c]) return Promise.resolve(null); directTried[c] = 1; return listDir(c).then(function () { return c; }).catch(function () { return null; }); }
     function loop() {
       if ((!pq.length && !nq.length) || listings >= MAX) return Promise.resolve(null);
-      var wave = []; while ((pq.length || nq.length) && wave.length < 8 && listings < MAX) { wave.push(pq.length ? pq.shift() : nq.shift()); listings++; }
+      var wave = []; while ((pq.length || nq.length) && wave.length < 24 && listings < MAX) { wave.push(pq.length ? pq.shift() : nq.shift()); listings++; }
       return Promise.all(wave.map(function (item) {
         return listDir(item.d).catch(function () { return null; }).then(function (r) {
           if (!r) return null; if (rootPath == null && r.root) rootPath = r.root;
@@ -382,7 +407,20 @@
 
     var resolveCacheRef = useRef({});
     var folderCacheRef = useRef({});
-    var pathValidRef = useRef({});
+    var pathValidRef = useRef(null); if (pathValidRef.current === null) pathValidRef.current = {};
+    var cacheReadyRef = useRef(false);
+    var backendRef = useRef(true);
+    useEffect(function () {
+      pcRemoteGet().then(function (r) {
+        var e = (r && r.entries) || {};
+        Object.keys(e).forEach(function (k) { if (!(k in pathValidRef.current)) pathValidRef.current[k] = { state: e[k].state, resolved: e[k].resolved }; });
+        cacheReadyRef.current = true; setPathV(function (v) { return v + 1; });
+      }).catch(function () {
+        backendRef.current = false;
+        var ls = fxLoadCache(); Object.keys(ls).forEach(function (k) { if (!(k in pathValidRef.current)) pathValidRef.current[k] = ls[k]; });
+        cacheReadyRef.current = true; setPathV(function (v) { return v + 1; });
+      });
+    }, []);
     var searchChainRef = useRef(Promise.resolve());
     var pvSt = useState(0); var pathV = pvSt[0], setPathV = pvSt[1];
     var indexRef = useRef(null);
@@ -457,7 +495,7 @@
     }
     navPathHandler.folders = true;
     navPathHandler.known = function (cand) { var e = pathValidRef.current[cand]; return e ? e.state : undefined; };
-    navPathHandler.ensure = function (cand, isF) { if (pathValidRef.current[cand]) return; pathValidRef.current[cand] = { state: "pending" }; validatePath(cand, isF).then(function (res) { pathValidRef.current[cand] = res.valid ? { state: "valid", resolved: res.resolved } : { state: "invalid" }; setPathV(function (v) { return v + 1; }); }).catch(function () { pathValidRef.current[cand] = { state: "invalid" }; setPathV(function (v) { return v + 1; }); }); };
+    navPathHandler.ensure = function (cand, isF) { if (!cacheReadyRef.current) return; if (pathValidRef.current[cand]) return; pathValidRef.current[cand] = { state: "pending" }; validatePath(cand, isF).then(function (res) { var rec = res.valid ? { state: "valid", resolved: res.resolved } : { state: "invalid" }; pathValidRef.current[cand] = rec; if (backendRef.current) pcRemotePut(cand, rec).catch(function () { }); else fxSaveCache(cand, rec); setPathV(function (v) { return v + 1; }); }).catch(function () { var rec = { state: "invalid" }; pathValidRef.current[cand] = rec; if (backendRef.current) pcRemotePut(cand, rec).catch(function () { }); else fxSaveCache(cand, rec); setPathV(function (v) { return v + 1; }); }); };
     navPathHandler.resolvedOf = function (cand) { var e = pathValidRef.current[cand]; return (e && e.resolved) || cand; };
     navPathHandler.hrefFor = function (p) { var t = navPathHandler.resolvedOf(p); return isFilePath(t) ? filesDownloadHref(t) : (currentPluginPath() + "?path=" + encodeURIComponent(String(t).replace(/^\/+/, ""))); };
 
