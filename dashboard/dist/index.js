@@ -785,7 +785,7 @@
       var active = uploads.filter(function (u) { return u.status === "uploading" || u.status === "queued"; }).length;
       var done = uploads.filter(function (u) { return u.status === "done"; }).length;
       var errs = uploads.filter(function (u) { return u.status === "error"; }).length;
-      return h("div", { style: { border: "1px solid " + borderC, borderRadius: 12, background: cardBg, marginBottom: 10, overflow: "hidden", flex: "0 0 auto" } },
+      return h("div", { style: { border: "1px solid " + borderC, borderRadius: 12, background: bgMuted, marginBottom: 10, overflow: "hidden", flex: "0 0 auto" } },
         h("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: "1px solid " + borderC, fontSize: 12.5 } },
           h("span", { style: { fontWeight: 700 } }, active ? ("L\u00e4dt hoch \u2026 " + active + " offen") : "Uploads"),
           h("span", { style: { color: muted } }, done + " fertig" + (errs ? (" \u00b7 " + errs + " Fehler") : "")),
@@ -809,7 +809,7 @@
         : zip.phase === "done" ? ("\u201e" + zip.name + ".zip\u201c heruntergeladen" + (zip.skipped ? (" \u00b7 " + zip.skipped + " \u00fcbersprungen") : "") + (zip.partial ? " \u00b7 Ordner sehr gro\u00df, evtl. unvollst\u00e4ndig" : ""))
         : zip.phase === "error" ? ("ZIP fehlgeschlagen: " + (zip.error || "Fehler")) : "";
       var col = zip.phase === "error" ? "#f87171" : zip.phase === "done" ? "#22c55e" : accent;
-      return h("div", { style: { border: "1px solid " + borderC, borderRadius: 12, background: cardBg, marginBottom: 10, overflow: "hidden", flex: "0 0 auto" } },
+      return h("div", { style: { border: "1px solid " + borderC, borderRadius: 12, background: bgMuted, marginBottom: 10, overflow: "hidden", flex: "0 0 auto" } },
         h("div", { style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", fontSize: 12.5 } },
           h("span", { style: { color: col, display: "inline-flex", flex: "0 0 auto" } }, DownloadIcon(15)),
           h("span", { style: { flex: "1 1 auto", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, label),
@@ -867,7 +867,7 @@
           query ? h("button", { onClick: function () { setQuery(""); setResults(null); }, title: "Clear", style: { position: "absolute", right: 6, background: "transparent", border: "none", color: muted, cursor: "pointer", display: "inline-flex", padding: 2 } }, XIcon(15)) : null)),
       uploadPanel(),
       zipIndicator(),
-      h("div", { onDragEnter: onDragEnter, onDragOver: onDragOver, onDragLeave: onDragLeave, onDrop: onDrop, style: { flex: "1 1 auto", position: "relative", overflow: "auto", border: "1px solid " + borderC, borderRadius: 12, background: cardBg, minHeight: 0 } },
+      h("div", { onDragEnter: onDragEnter, onDragOver: onDragOver, onDragLeave: onDragLeave, onDrop: onDrop, style: { flex: "1 1 auto", position: "relative", overflow: "auto", border: "1px solid " + borderC, borderRadius: 12, background: "transparent", minHeight: 0 } },
         query ? resultsView() : listView(),
         dragOver ? dropOverlay() : null),
       viewer(), mkdirModal(), conflictModal(), deleteModal());

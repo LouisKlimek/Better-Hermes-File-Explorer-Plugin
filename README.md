@@ -176,6 +176,11 @@ None required. Optional manifest fields you can tweak in
   current Chromium and Firefox.
 - `GET /api/files/read` is size-limited by Hermes; oversized files can't be
   previewed inline — use **Download**.
+- **Theme-friendly** — the explorer draws on the dashboard's own CSS theme
+  variables (`--primary`, `--card`, `--muted`, `--border`, `--muted-foreground`)
+  and keeps the file list and inline panels transparent/translucent, so it blends
+  with any dashboard theme (dark, black, the default green, …) instead of drawing
+  an opaque box. Modals stay solid for readability.
 - Tested against the Hermes dashboard plugin SDK (React, no build step).
 
 ## License
