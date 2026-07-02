@@ -205,6 +205,25 @@
 
   var SKIP = { "node_modules": 1, ".git": 1, "__pycache__": 1, "site-packages": 1, ".venv": 1, "venv": 1, ".cache": 1, ".npm": 1, ".mypy_cache": 1, "dist": 1, ".next": 1, "build": 1 };
 
+  // JSON syntax highlighting → array of colored spans + plain strings (no innerHTML).
+  var JSON_COLORS = { key: "#3b82f6", str: "#16a34a", num: "#d97706", bool: "#9333ea", nul: "#6b7280" };
+  function jsonHighlight(str) {
+    var out = [], re = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false)\b|\b(null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
+    var last = 0, m, k = 0;
+    while ((m = re.exec(str)) !== null) {
+      if (m.index > last) out.push(str.slice(last, m.index));
+      if (m[1] != null) {
+        if (m[2] != null) { out.push(h("span", { key: k++, style: { color: JSON_COLORS.key } }, m[1])); out.push(m[2]); }
+        else out.push(h("span", { key: k++, style: { color: JSON_COLORS.str } }, m[1]));
+      } else if (m[3] != null) out.push(h("span", { key: k++, style: { color: JSON_COLORS.bool } }, m[3]));
+      else if (m[4] != null) out.push(h("span", { key: k++, style: { color: JSON_COLORS.nul } }, m[4]));
+      else if (m[5] != null) out.push(h("span", { key: k++, style: { color: JSON_COLORS.num } }, m[5]));
+      last = re.lastIndex;
+    }
+    if (last < str.length) out.push(str.slice(last));
+    return out;
+  }
+
   // Directed search: resolve a (possibly prefix-missing) relative path to a real file.
   function resolveFilePath(relRaw, cacheRef) {
     var rel = String(relRaw).replace(/^\/+/, "");
@@ -711,15 +730,20 @@
       var fp = filePreview;
       var isMd = /markdown/i.test(fp.mime || "") || /\.(md|markdown)$/i.test(fp.name || fp.path || "");
       var isImg = /^image\//i.test(fp.mime || "") || /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i.test(fp.name || fp.path || "");
+      var isJson = /json/i.test(fp.mime || "") || /\.jsonc?$/i.test(fp.name || fp.path || "");
+      var jsonPretty = null;
+      if (isJson && fp.text != null) { try { jsonPretty = JSON.stringify(JSON.parse(fp.text), null, 2); } catch (e) { jsonPretty = null; } }
+      var jsonBeautified = (jsonPretty != null && !previewRaw);
       var body = fp.loading ? h("div", { style: { color: muted, fontSize: 13 } }, fp.searching ? "File not at that path \u2014 searching the file tree\u2026" : "Loading\u2026")
         : fp.err ? h("div", { style: { color: "#f87171", fontSize: 13, lineHeight: 1.6 } }, "Could not open file: " + fp.err + (fp.searchedNoMatch ? " (no match found by searching either)" : "") + ". You can still try the Download button.")
         : (isImg && fp.dataUrl) ? h("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: 10 } },
             h("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", width: "100%", borderRadius: 10, padding: 14, background: "repeating-conic-gradient(rgba(128,128,128,.14) 0% 25%, transparent 0% 50%) 50% / 20px 20px" } },
               h("img", { src: fp.dataUrl, alt: fp.name || fp.path, style: { maxWidth: "100%", maxHeight: "70vh", height: "auto", objectFit: "contain", borderRadius: 6, boxShadow: "0 4px 18px rgba(0,0,0,.35)" } })),
             h("div", { style: { fontSize: 11, color: muted } }, (fp.mime || "image") + (fp.size ? " \u00b7 " + fmtBytes(fp.size) : "")))
-        : (fp.text != null) ? ((isMd && !previewRaw) ? h("div", { style: { fontSize: 13.5, lineHeight: 1.65, wordBreak: "break-word" } }, mdBlocks(fp.text, navPathHandler)) : h("pre", { style: { margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-courier, monospace)", fontSize: 12.5, lineHeight: 1.65 } }, fp.text))
+        : (fp.text != null) ? ((isMd && !previewRaw) ? h("div", { style: { fontSize: 13.5, lineHeight: 1.65, wordBreak: "break-word" } }, mdBlocks(fp.text, navPathHandler)) : jsonBeautified ? h("pre", { style: { margin: 0, whiteSpace: "pre", overflowX: "auto", fontFamily: "var(--font-courier, monospace)", fontSize: 12.5, lineHeight: 1.6, background: bgMuted, padding: "12px 14px", borderRadius: 10 } }, jsonPretty.length <= 200000 ? jsonHighlight(jsonPretty) : jsonPretty) : h("pre", { style: { margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "var(--font-courier, monospace)", fontSize: 12.5, lineHeight: 1.65 } }, fp.text))
         : h("div", { style: { color: muted, fontSize: 13 } }, "No inline preview for this file type (" + (fp.mime || "unknown") + "). Use the Download button to open it.");
       var mdToggle = (isMd && fp.text != null) ? h("button", { onClick: function () { setPreviewRaw(!previewRaw); }, style: { flex: "0 0 auto", background: "transparent", color: muted, border: "1px solid " + borderC, borderRadius: 8, padding: "7px 12px", fontSize: 12.5, cursor: "pointer" } }, previewRaw ? "Rendered" : "Raw") : null;
+      var jsonToggle = (jsonPretty != null && fp.text != null) ? h("button", { onClick: function () { setPreviewRaw(!previewRaw); }, title: previewRaw ? "Beautified anzeigen" : "Original anzeigen", style: { flex: "0 0 auto", background: "transparent", color: muted, border: "1px solid " + borderC, borderRadius: 8, padding: "7px 12px", fontSize: 12.5, cursor: "pointer" } }, previewRaw ? "Beautified" : "Original") : null;
       return h("div", { onClick: function () { closeViewer(); }, style: { position: "fixed", inset: 0, zIndex: 2147483300, background: "rgba(0,0,0,.55)", backdropFilter: "blur(2px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "3vh 2vw" } },
         h("div", { onClick: function (e) { e.stopPropagation(); }, style: { width: "min(920px, 96vw)", height: "86vh", background: cardBg, border: "1px solid " + borderC, borderRadius: 14, boxShadow: "0 24px 70px rgba(0,0,0,.6)", display: "flex", flexDirection: "column", overflow: "hidden" } },
           h("div", { style: { display: "flex", alignItems: "center", gap: 12, padding: "13px 18px", borderBottom: "1px solid " + borderC, flex: "0 0 auto" } },
@@ -729,6 +753,7 @@
               h("div", { style: { fontSize: 11, color: muted, fontFamily: "var(--font-courier, monospace)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: fp.path }, fp.path),
               fp.orig ? h("div", { style: { fontSize: 10.5, color: muted, marginTop: 1 } }, "auto-resolved from \u201c" + fp.orig + "\u201d") : null),
             mdToggle,
+            jsonToggle,
             h("a", { href: filesDownloadHref(fp.path), target: "_blank", rel: "noopener noreferrer", style: { flex: "0 0 auto", textDecoration: "none", color: accent, border: "1px solid " + borderC, borderRadius: 8, padding: "7px 13px", fontSize: 12.5 } }, "Download"),
             h("button", { onClick: function () { closeViewer(); }, title: "Close (Esc)", style: { flex: "0 0 auto", background: "transparent", color: muted, border: "1px solid " + borderC, borderRadius: 9, padding: 8, cursor: "pointer", display: "inline-flex" } }, XIcon(20))),
           h("div", { style: { flex: "1 1 auto", overflow: "auto", padding: "18px 22px" } }, body)));

@@ -54,7 +54,11 @@ nothing new to authenticate: it uses your existing dashboard session.
     toggle.
   - **Images** (`png`, `jpg`, `gif`, `webp`, `svg`, …) shown inline on a
     transparency-checker background.
-  - **Text / code / JSON / YAML** shown as readable monospace.
+  - **JSON** is **beautified by default** — pretty-printed with indentation and
+    syntax highlighting (keys, strings, numbers, booleans, `null` colour-coded).
+    A header toggle switches between **Beautified** and **Original**; invalid
+    JSON falls back to the raw view automatically.
+  - **Text / code / YAML** shown as readable monospace.
   - **Download** button for anything (uses the core download endpoint).
 - **Clickable paths inside files** — file paths written inside a Markdown file
   become links that open the target *in the same viewer*, with a **← Back**
