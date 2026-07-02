@@ -405,6 +405,7 @@
     var stackRef = useRef([]); stackRef.current = stack;
     var cwdRef = useRef(""); cwdRef.current = cwd;
     var didInit = useRef(false);
+    var loadSeqRef = useRef(0);   // invalidates in-flight file loads on close/nav
     var rootRef = useRef(""); if (dir && dir.root) rootRef.current = dir.root;   // absolute managed root, e.g. /opt/data
     var fileInputRef = useRef(null);
     var folderInputRef = useRef(null);
@@ -433,20 +434,24 @@
     // viewer
     function loadFilePreview(path) {
       var clean = String(path).replace(/^\/+/, "");
+      var seq = ++loadSeqRef.current;                 // any close/nav invalidates this load
+      var live = function () { return loadSeqRef.current === seq; };
+      var put = function (v) { if (live()) setFilePreview(v); };
       setPreviewRaw(false); setFilePreview({ path: path, loading: true });
-      readFile(clean).then(function (r) { setFilePreview(Object.assign({ path: clean, loading: false }, parseRead(clean, r))); })
+      readFile(clean).then(function (r) { put(Object.assign({ path: clean, loading: false }, parseRead(clean, r))); })
         .catch(function () {
-          setFilePreview({ path: path, loading: true, searching: true });
+          put({ path: path, loading: true, searching: true });
           resolveFilePath(clean, resolveCacheRef).then(function (resolved) {
-            if (resolved && resolved !== clean) { setCwd(dirOf(resolved)); readFile(resolved).then(function (r) { setFilePreview(Object.assign({ path: resolved, orig: path, loading: false }, parseRead(resolved, r))); }).catch(function (e) { setFilePreview({ path: path, loading: false, err: (e && e.message) || "not found" }); }); }
-            else setFilePreview({ path: path, loading: false, err: "not found", searchedNoMatch: true });
-          }).catch(function () { setFilePreview({ path: path, loading: false, err: "not found" }); });
+            if (!live()) return;
+            if (resolved && resolved !== clean) { setCwd(dirOf(resolved)); readFile(resolved).then(function (r) { put(Object.assign({ path: resolved, orig: path, loading: false }, parseRead(resolved, r))); }).catch(function (e) { put({ path: path, loading: false, err: (e && e.message) || "not found" }); }); }
+            else put({ path: path, loading: false, err: "not found", searchedNoMatch: true });
+          }).catch(function () { put({ path: path, loading: false, err: "not found" }); });
         });
     }
     function openViewer(path) { setStack([]); loadFilePreview(path); }
     function navViewer(path) { var cur = fpRef.current; if (cur) setStack(function (st) { return st.concat([cur]); }); loadFilePreview(path); }
-    function backViewer() { var st = stackRef.current || []; if (!st.length) { setFilePreview(null); return; } var prev = st[st.length - 1]; setStack(st.slice(0, -1)); setPreviewRaw(false); setFilePreview(prev); }
-    function closeViewer() { setFilePreview(null); setStack([]); }
+    function backViewer() { loadSeqRef.current++; var st = stackRef.current || []; if (!st.length) { setFilePreview(null); return; } var prev = st[st.length - 1]; setStack(st.slice(0, -1)); setPreviewRaw(false); setFilePreview(prev); }
+    function closeViewer() { loadSeqRef.current++; setFilePreview(null); setStack([]); }
 
     // path handler for markdown inside previewed files: files open in viewer, folders navigate the browser
     function navPathHandler(path) {
