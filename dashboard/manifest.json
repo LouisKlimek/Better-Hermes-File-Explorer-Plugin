@@ -3,11 +3,10 @@
   "label": "Files",
   "description": "Better Hermes File Explorer — browse the managed file tree, preview files inline (Markdown rendering, images, raw text, auto path-resolution), search filenames across the whole tree, and deep-link to any folder or file by URL.",
   "icon": "FolderOpen",
-  "version": "1.9.0",
+  "version": "1.6.0",
   "tab": {
     "path": "/file-explorer",
     "position": "after:skills"
   },
-  "entry": "dist/index.js",
-  "api": "plugin_api.py"
+  "entry": "dist/index.js"
 }
